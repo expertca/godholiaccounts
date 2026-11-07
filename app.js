@@ -38,7 +38,7 @@ function switchTab(id) {
     if(window.innerWidth < 768 && document.getElementById('mobile-overlay').classList.contains('active')) toggleSidebar();
 }
 
-// --- AUTH, TOKENS & API WRAPPER ---
+// --- AUTH & API WITH DELTA UPDATES ---
 let currentAuthResolver = null;
 let storedToken = localStorage.getItem('fam_token');
 
@@ -47,12 +47,8 @@ function executeLogin(e) {
     const u = document.getElementById('loginUsername').value, p = document.getElementById('loginPassword').value, btn = document.getElementById('loginBtn');
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Authenticating...';
     
-    fetch(SCRIPT_URL, {
-        method: 'POST',
-        body: JSON.stringify({ method: 'doLogin', token: null, args: [u, p] })
-    })
-    .then(response => response.json())
-    .then(res => {
+    fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify({ method: 'doLogin', token: null, args: [u, p] }) })
+    .then(r => r.json()).then(res => {
         btn.innerHTML = 'Unlock Ledger';
         if (res.error) { document.getElementById('loginError').innerText = res.error; } 
         else if (res.token) {
@@ -60,11 +56,7 @@ function executeLogin(e) {
             document.getElementById('authGate').classList.add('hidden'); document.getElementById('loginError').innerText = '';
             loadAllData(false);
         }
-    })
-    .catch(err => {
-        btn.innerHTML = 'Unlock Ledger';
-        document.getElementById('loginError').innerText = "Network connection failed.";
-    });
+    }).catch(err => { btn.innerHTML = 'Unlock Ledger'; document.getElementById('loginError').innerText = "Network connection failed."; });
 }
 
 function executeReAuth(e) {
@@ -72,12 +64,8 @@ function executeReAuth(e) {
     const p = document.getElementById('reauthPassword').value, btn = document.getElementById('reauthBtn');
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Verifying...';
     
-    fetch(SCRIPT_URL, {
-        method: 'POST',
-        body: JSON.stringify({ method: 'doLogin', token: null, args: [userCtx.username, p] })
-    })
-    .then(response => response.json())
-    .then(res => {
+    fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify({ method: 'doLogin', token: null, args: [userCtx.username, p] }) })
+    .then(r => r.json()).then(res => {
         btn.innerHTML = 'Resume Action';
         if (res.error) { document.getElementById('reauthError').innerText = res.error; } 
         else if (res.token) {
@@ -85,11 +73,7 @@ function executeReAuth(e) {
             closeModal('reAuthGate'); document.getElementById('reauthError').innerText = '';
             if(currentAuthResolver) { currentAuthResolver(res.token); currentAuthResolver = null; }
         }
-    })
-    .catch(err => {
-        btn.innerHTML = 'Resume Action';
-        document.getElementById('reauthError').innerText = "Network connection failed.";
-    });
+    }).catch(err => { btn.innerHTML = 'Resume Action'; document.getElementById('reauthError').innerText = "Network connection failed."; });
 }
 
 function logout() {
@@ -102,35 +86,16 @@ function apiCall(methodName, ...args) {
     return new Promise((resolve, reject) => {
         if (!storedToken && methodName === 'getAppData') return reject(new Error("No Token"));
         const attemptCall = (tokenToUse) => {
-            fetch(SCRIPT_URL, {
-                method: 'POST',
-                body: JSON.stringify({ method: methodName, token: tokenToUse, args: args })
-            })
-            .then(response => response.json())
-            .then(res => {
+            fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify({ method: methodName, token: tokenToUse, args: args }) })
+            .then(r => r.json()).then(res => {
                 if (res.error === "SESSION_EXPIRED") {
                     document.getElementById('reauthPassword').value = ''; openModal('reAuthGate');
                     new Promise(resReAuth => { currentAuthResolver = resReAuth; }).then(newToken => attemptCall(newToken)); 
                 } else if (res.error) { reject(new Error(res.error)); } else { resolve(res); }
-            })
-            .catch(err => reject(new Error("Network Error: Could not reach the server.")));
+            }).catch(err => reject(new Error("Network Error: Could not reach the server.")));
         };
         attemptCall(storedToken);
     });
-}
-
-async function executeApiAction(e, methodName, payloadStr, optionalArg = null) {
-    if(e) e.preventDefault(); const form = e.target, btn = form.querySelector('button[type="submit"]'), originalText = btn.innerHTML;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...'; btn.disabled = true;
-    try {
-        let res; if(optionalArg) res = await apiCall(methodName, optionalArg, payloadStr); else res = await apiCall(methodName, payloadStr);
-        showToast('Action Successful'); closeModal(form.closest('.modal').id); 
-        
-        // Essential 1.2s delay to ensure Google Sheets finishes math calculations before pulling fresh data
-        setLoader(true);
-        await new Promise(r => setTimeout(r, 1200)); 
-        loadAllData(true);
-    } catch(err) { showToast(err.message, true); } finally { btn.innerHTML = originalText; btn.disabled = false; }
 }
 
 function loadAllData(silent = false) {
@@ -142,8 +107,7 @@ function loadAllData(silent = false) {
         document.getElementById('user-role-badge').innerText = userCtx.role === 2 ? 'Admin' : 'Viewer';
         document.querySelectorAll('.admin-only').forEach(el => el.style.display = userCtx.role === 2 ? '' : 'none');
         populateDropdowns();
-        if(!document.getElementById('view-dashboard').classList.contains('hidden')) updateDashboard();
-        renderMembers(); renderContributions(); renderDonations(); renderLiabilities(); renderLedger(); renderMasterData(); renderAudit();
+        renderAllViews();
         setLoader(false);
     }).catch(err => {
         setLoader(false);
@@ -151,7 +115,74 @@ function loadAllData(silent = false) {
     });
 }
 
-// --- PAYLOAD BUILDERS FOR API ---
+function renderAllViews() {
+    if(!document.getElementById('view-dashboard').classList.contains('hidden')) updateDashboard();
+    renderMembers(); renderContributions(); renderDonations(); renderLiabilities(); renderLedger(); renderMasterData(); renderAudit();
+}
+
+// --- INSTANT DELTA UPDATES (Zero Load Screen on Save) ---
+async function executeApiAction(e, methodName, payloadStr, optionalArg = null) {
+    if(e) e.preventDefault(); const form = e.target, btn = form.querySelector('button[type="submit"]'), originalText = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...'; btn.disabled = true;
+    try {
+        let res; if(optionalArg) res = await apiCall(methodName, optionalArg, payloadStr); else res = await apiCall(methodName, payloadStr);
+        showToast('Action Successful'); closeModal(form.closest('.modal').id); 
+        
+        // Optimistic State Update
+        const payload = JSON.parse(payloadStr);
+        if (methodName === 'saveVoucher') {
+            if (payload.isEdit) appData.Ledger = appData.Ledger.filter(t => t.GroupID !== payload.groupID);
+            if (res.newLines) appData.Ledger.push(...res.newLines);
+        } else if (methodName === 'saveGenericRecord' || methodName === 'saveExpected') {
+            payload.ID = res.id; payload.LastUpdatedBy = userCtx.username;
+            const targetArray = appData[optionalArg || 'Expected'];
+            const idx = targetArray.findIndex(x => x.ID === payload.ID);
+            if (idx > -1) targetArray[idx] = { ...targetArray[idx], ...payload }; else targetArray.push(payload);
+        } else if (methodName === 'saveBulkExpected') {
+            if (res.newRecords) appData.Expected.push(...res.newRecords);
+        } else if (methodName === 'saveUserAuth') {
+            const uIdx = appData.Users.findIndex(u => u.MemberID === payload.MemberID);
+            if (uIdx > -1) { appData.Users[uIdx].Username = payload.Username; appData.Users[uIdx].Role = payload.Role; appData.Users[uIdx].IsLocked = payload.IsLocked; }
+            else appData.Users.push({ MemberID: payload.MemberID, Username: payload.Username, Role: payload.Role, IsLocked: payload.IsLocked });
+        }
+        
+        // Re-render UI instantly from memory
+        renderAllViews();
+        
+        // Silent Background Sync 2 seconds later to verify against Google Sheet Math
+        setTimeout(() => loadAllData(true), 2000);
+        
+    } catch(err) { showToast(err.message, true); } 
+    finally { btn.innerHTML = originalText; btn.disabled = false; }
+}
+
+async function deleteEntry(groupId, btnElement, modalToClose) {
+    if(!(await customConfirm("Delete Voucher?", "Delete this entire voucher completely? This action cannot be undone."))) return;
+    const originalText = btnElement.innerHTML; btnElement.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; btnElement.disabled = true;
+    try { 
+        await apiCall('deleteVoucher', groupId); showToast('Deleted'); 
+        if(modalToClose) closeModal(modalToClose); 
+        
+        // Delta Update
+        appData.Ledger = appData.Ledger.filter(t => t.GroupID !== groupId);
+        renderAllViews(); setTimeout(() => loadAllData(true), 2000);
+    } 
+    catch(err) { showToast(err.message, true); } 
+    finally { btnElement.innerHTML = originalText; btnElement.disabled = false; }
+}
+
+async function deleteExpected(id, btnElement) {
+    if(!(await customConfirm("Remove Due?", "Are you sure you want to remove this assigned due?"))) return;
+    const originalHtml = btnElement.innerHTML; btnElement.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; btnElement.disabled = true;
+    try { 
+        await apiCall('deleteGenericRecord', 'Expected', id); showToast('Due Deleted'); 
+        appData.Expected = appData.Expected.filter(e => e.ID !== id);
+        renderAllViews(); setTimeout(() => loadAllData(true), 2000);
+    } 
+    catch(e) { showToast(e.message, true); btnElement.innerHTML = originalHtml; btnElement.disabled = false; }
+}
+
+// --- PAYLOAD BUILDERS ---
 function buildVoucherPayload() {
     const mode = document.getElementById('smart-vouch-mode').value, editId = document.getElementById('smart-vouch-edit-id').value, date = document.getElementById('smart-vouch-date').value, memo = document.getElementById('smart-vouch-memo').value, mainAcc = document.getElementById('smart-vouch-main-acc').value;
     let lines = [], totalLinesAmt = 0;
@@ -176,34 +207,6 @@ function buildBulkExpectedPayload() {
 }
 function buildMasterPayload(e) { let data = {}; e.target.querySelectorAll('[data-col]').forEach(inp => data[inp.dataset.col] = inp.value); return JSON.stringify(data); }
 
-async function deleteEntry(groupId, btnElement, modalToClose) {
-    if(!(await customConfirm("Delete Voucher?", "Delete this entire voucher completely? This action cannot be undone."))) return;
-    const originalText = btnElement.innerHTML; btnElement.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; btnElement.disabled = true;
-    try { 
-        await apiCall('deleteVoucher', groupId); 
-        showToast('Deleted'); 
-        if(modalToClose) closeModal(modalToClose); 
-        
-        setLoader(true);
-        await new Promise(r => setTimeout(r, 1200)); 
-        loadAllData(true); 
-    } 
-    catch(err) { showToast(err.message, true); btnElement.innerHTML = originalText; btnElement.disabled = false; }
-}
-
-async function deleteExpected(id) {
-    if(!(await customConfirm("Remove Due?", "Are you sure you want to remove this assigned due?"))) return;
-    try { 
-        await apiCall('deleteGenericRecord', 'Expected', id); 
-        showToast('Due Deleted'); 
-        
-        setLoader(true);
-        await new Promise(r => setTimeout(r, 1200)); 
-        loadAllData(true); 
-    } 
-    catch(e) { showToast(e.message, true); }
-}
-
 // --- GLOBAL OPTIONS ---
 let optAccounts = '', optCategories = '', optEvents = '', optMembers = '';
 function populateDropdowns() {
@@ -226,7 +229,7 @@ function getCapCache() {
         if(!caps[eId]) caps[eId] = {}; 
         if(!caps[eId][t.MemberID]) caps[eId][t.MemberID] = { expected: 0, paid: 0 }; 
         if (t.Type == 2) caps[eId][t.MemberID].paid += parseFloat(t.Amount) || 0; 
-        if (t.Type == 1) caps[eId][t.MemberID].paid -= parseFloat(t.Amount) || 0; 
+        if (t.Type == 1) caps[eId][t.MemberID].paid -= parseFloat(t.Amount) || 0; // Journal setoff mathematically reverses payment
     });
     return caps;
 }
@@ -312,34 +315,16 @@ function updateDashboard() {
         }
     });
     document.getElementById('dash-cash').innerText = fmtIdr(cash); document.getElementById('dash-bank').innerText = fmtIdr(bank); document.getElementById('dash-expenses').innerText = fmtIdr(expYTD); document.getElementById('dash-payables').innerText = fmtIdr(payables); document.getElementById('dash-contrib').innerText = fmtIdr(contribRec); document.getElementById('dash-donation').innerText = fmtIdr(donRec);
-    let evHtml = ''; Object.values(evtData).filter(d => d.inc > 0 || d.exp > 0).sort((a,b) => (b.inc - b.exp) - (a.inc - a.exp)).forEach(ev => { const bal = ev.inc - ev.exp; evHtml += `<tr class="hover:bg-slate-50 border-b border-slate-100"><td class="py-3 px-2 font-medium text-slate-700">${ev.name}</td><td class="py-3 px-2 text-right font-bold text-emerald-600">${ev.inc > 0 ? fmtIdr(ev.inc) : '-'}</td><td class="py-3 px-2 text-right font-bold text-rose-600">${ev.exp > 0 ? fmtIdr(ev.exp) : '-'}</td><td class="py-3 px-2 text-right font-black ${bal >= 0 ? 'text-indigo-600' : 'text-rose-600'}">${fmtIdr(bal)}</td></tr>`; });
+    let evHtml = ''; Object.values(evtData).filter(d => d.inc > 0 || d.exp > 0).sort((a,b) => (b.inc - b.exp) - (a.inc - a.exp)).forEach(ev => { const bal = ev.inc - ev.exp; evHtml += `<tr class="hover:bg-slate-50 border-b border-slate-100"><td class="py-3 px-3 text-xs md:text-sm font-medium text-slate-700">${ev.name}</td><td class="py-3 px-3 text-xs md:text-sm text-right font-bold text-emerald-600">${ev.inc > 0 ? fmtIdr(ev.inc) : '-'}</td><td class="py-3 px-3 text-xs md:text-sm text-right font-bold text-rose-600">${ev.exp > 0 ? fmtIdr(ev.exp) : '-'}</td><td class="py-3 px-3 text-xs md:text-sm text-right font-black ${bal >= 0 ? 'text-indigo-600' : 'text-rose-600'}">${fmtIdr(bal)}</td></tr>`; });
     document.getElementById('dash-events-tbody').innerHTML = evHtml || `<tr><td colspan="4" class="py-6 text-center text-slate-400 italic">No event financials recorded.</td></tr>`;
     let recentHtml = ''; const allGroups = [...new Set([...appData.Ledger].reverse().map(t => t.GroupID))].slice(0, 7); 
     allGroups.forEach(gId => {
         const grpItems = appData.Ledger.filter(t => t.GroupID === gId); if (grpItems.length === 0) return;
         const dt = grpItems[0].Date; let totAmt = 0; grpItems.forEach(x => { if(x.Type == 1) totAmt += Math.abs(parseFloat(x.Amount)); });
         const particulars = [...new Set(grpItems.filter(x=>x.CategoryID).map(x=> appData.Categories.find(c=>c.ID===x.CategoryID)?.Name))].join(', ') || 'Journal Entry';
-        recentHtml += `<tr class="hover:bg-slate-50 border-b border-slate-100 cursor-pointer" onclick="switchTab('ledger')"><td class="py-3 px-2 text-[10px] text-slate-500 whitespace-nowrap">${dt}</td><td class="py-3 px-2 text-xs font-medium text-slate-700 truncate max-w-[150px] md:max-w-[200px]" title="${particulars}">${particulars}</td><td class="py-3 px-2 text-right font-bold text-slate-800">${fmtIdr(totAmt)}</td></tr>`;
+        recentHtml += `<tr class="hover:bg-slate-50 border-b border-slate-100 cursor-pointer" onclick="switchTab('ledger')"><td class="py-3 px-3 text-[10px] text-slate-500 whitespace-nowrap">${dt}</td><td class="py-3 px-3 text-xs font-medium text-slate-700 whitespace-normal leading-tight">${particulars}</td><td class="py-3 px-3 text-xs md:text-sm text-right font-bold text-slate-800">${fmtIdr(totAmt)}</td></tr>`;
     });
     document.getElementById('dash-recent-tbody').innerHTML = recentHtml || `<tr><td colspan="3" class="py-6 text-center text-slate-400 italic">No recent activity.</td></tr>`;
-}
-
-// --- ACCOUNT DRILLDOWN ---
-function openAccountDrilldown(accType) {
-    const tbody = document.getElementById('drilldown-tbody'); tbody.innerHTML = ''; const accs = appData.Accounts.filter(a => a.Type == accType); let totalTypeBal = 0;
-    accs.forEach(acc => {
-        let bal = 0; appData.Ledger.filter(t => t.AccountID === acc.ID).forEach(t => { bal += (t.Type == 1 ? Math.abs(parseFloat(t.Amount)) : -Math.abs(parseFloat(t.Amount))); });
-        totalTypeBal += bal;
-        tbody.innerHTML += `<tr class="hover:bg-slate-50 border-b border-slate-100"><td class="py-3 px-2 font-medium text-slate-700">${acc.Name}</td><td class="py-3 px-2 text-right font-bold text-slate-800">${fmtIdr(bal)}</td><td class="py-3 px-2 text-center"><button onclick="closeModal('modal-account-list'); jumpToAccountStmt('${acc.ID}')" class="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded hover:bg-indigo-100 transition-colors">Statement</button></td></tr>`;
-    });
-    tbody.innerHTML += `<tr class="bg-slate-100/50"><td class="py-3 px-2 font-black text-slate-700 uppercase tracking-wider text-[10px]">Total</td><td class="py-3 px-2 text-right font-black text-indigo-700 text-lg">${fmtIdr(totalTypeBal)}</td><td></td></tr>`;
-    document.getElementById('drilldown-title').innerText = accType == 1 ? 'Cash Accounts Overview' : 'Bank Accounts Overview';
-    openModal('modal-account-list');
-}
-function jumpToAccountStmt(accId) { 
-    switchTab('reports'); document.getElementById('reportSelector').value = 'stmt'; 
-    onReportTypeChange(); 
-    setTimeout(() => { document.getElementById('reportParam').value = accId; runReport(); }, 100); 
 }
 
 // --- DIRECTORY & USERS ---
@@ -366,8 +351,13 @@ function renderMembers() {
     const tbody = document.getElementById('member-tbody'), q = document.getElementById('search-member')?.value.toLowerCase() || '', filtered = appData.Members.filter(m => String(m.Name).toLowerCase().includes(q));
     tbody.innerHTML = [...filtered].reverse().map(m => {
         const u = appData.Users.find(x => x.MemberID === m.ID); let authHtml = `<span class="text-[10px] text-slate-400 italic">No Login Setup</span>`;
+        const isMe = u && u.ID === userCtx.id;
+        const isTargetAdmin = u && u.Role == 2;
+        const canManageAuth = (userCtx.role === 2) && (!isTargetAdmin || isMe || userCtx.username === 'admin');
+        const manageBtn = canManageAuth ? `<button onclick="openUserModal('${m.ID}', '${m.Name.replace(/'/g, "\\'")}')" class="text-slate-400 hover:text-amber-500 p-2" title="Manage Login Account"><i class="fas fa-key"></i></button>` : `<span class="text-slate-200 p-2"><i class="fas fa-lock"></i></span>`;
+
         if(u) { if(u.IsLocked) authHtml = `<span class="bg-rose-100 text-rose-700 px-2 py-0.5 rounded text-[9px] font-bold uppercase"><i class="fas fa-lock mr-1"></i>Locked</span><br><span class="text-[9px] text-slate-400">@${u.Username}</span>`; else authHtml = `<span class="text-[10px] text-emerald-600 font-bold"><i class="fas fa-check-circle mr-1"></i>Active</span><br><span class="text-[9px] text-slate-400">@${u.Username}</span>`; }
-        return `<tr class="hover:bg-slate-50 transition-colors"><td class="px-6 py-4 font-mono text-xs text-slate-400">${m.ID}</td><td class="px-6 py-4 font-bold text-slate-700">${m.Name}<br><span class="text-[10px] font-normal text-slate-400">${m.Email||'No Email'}</span></td><td class="px-6 py-4">${authHtml}</td><td class="px-6 py-4 text-center admin-only whitespace-nowrap"><button onclick="editMember('${m.ID}')" class="text-slate-400 hover:text-indigo-600 p-2 mr-2" title="Edit Profile"><i class="fas fa-edit"></i></button><button onclick="openUserModal('${m.ID}', '${m.Name.replace(/'/g, "\\'")}')" class="text-slate-400 hover:text-amber-500 p-2" title="Manage Login Account"><i class="fas fa-key"></i></button></td></tr>`;
+        return `<tr class="hover:bg-slate-50 transition-colors"><td class="px-3 py-3 font-mono text-[10px] text-slate-400">${m.ID}</td><td class="px-3 py-3 text-xs md:text-sm font-bold text-slate-700 whitespace-normal leading-tight">${m.Name}<br><span class="text-[10px] font-normal text-slate-400">${m.Email||'No Email'}</span></td><td class="px-3 py-3">${authHtml}</td><td class="px-3 py-3 text-center admin-only whitespace-nowrap"><button onclick="editMember('${m.ID}')" class="text-slate-400 hover:text-indigo-600 p-2 mr-1" title="Edit Profile"><i class="fas fa-edit"></i></button>${manageBtn}</td></tr>`;
     }).join('') || `<tr><td colspan="5" class="text-center py-8 text-slate-400">No members found.</td></tr>`;
     document.querySelectorAll('.admin-only').forEach(el => el.style.display = userCtx.role === 2 ? '' : 'none');
 }
@@ -378,17 +368,13 @@ function renderContributions() {
     let evtSummary = {}; 
     appData.Expected.forEach(x => { if(evtId && x.EventID !== evtId) return; const eId = x.EventID || 'general'; if(!evtSummary[eId]) evtSummary[eId] = { name: appData.Events.find(e=>e.ID===eId)?.Name || 'General', due: 0, paid: 0, mems: {} }; if(!evtSummary[eId].mems[x.MemberID]) evtSummary[eId].mems[x.MemberID] = { name: appData.Members.find(m=>m.ID===x.MemberID)?.Name || 'Unknown', due: 0, paid: 0, records: [] }; evtSummary[eId].mems[x.MemberID].records.push({id: x.ID, amt: parseFloat(x.Amount)}); evtSummary[eId].mems[x.MemberID].due += parseFloat(x.Amount); evtSummary[eId].due += parseFloat(x.Amount); });
     appData.Ledger.forEach(t => { 
-        if(evtId && t.EventID !== evtId) return; 
-        if(!t.MemberID || t.MemberID === 'ANON') return; 
-        const eId = t.EventID || 'general'; 
-        if(!evtSummary[eId] || !evtSummary[eId].mems[t.MemberID]) return; 
-        const amt = parseFloat(t.Amount) || 0; 
+        if(evtId && t.EventID !== evtId) return; if(!t.MemberID || t.MemberID === 'ANON') return; const eId = t.EventID || 'general'; if(!evtSummary[eId] || !evtSummary[eId].mems[t.MemberID]) return; const amt = parseFloat(t.Amount) || 0; 
         if (t.CategoryID === catContribId) { 
             if(t.Type == 2) { evtSummary[eId].mems[t.MemberID].paid += amt; evtSummary[eId].paid += amt; } 
             if(t.Type == 1) { evtSummary[eId].mems[t.MemberID].paid -= amt; evtSummary[eId].paid -= amt; }
         } 
     });
-    let html = ''; Object.keys(evtSummary).forEach(eId => { const ev = evtSummary[eId], bal = ev.due - ev.paid; html += `<tr class="bg-indigo-50 border-b border-indigo-100 cursor-pointer hover:bg-indigo-100 transition-colors" onclick="document.getElementById('evt-details-${eId}').classList.toggle('hidden')"><td class="px-6 py-4 font-bold text-indigo-800"><i class="fas fa-chevron-down mr-2 text-indigo-400 text-xs"></i> ${ev.name}</td><td class="px-6 py-4 text-right font-bold text-slate-700">${fmtIdr(ev.due)}</td><td class="px-6 py-4 text-right font-bold text-emerald-600">${fmtIdr(ev.paid)}</td><td class="px-6 py-4 text-right font-bold ${bal>0?'text-rose-600':'text-slate-500'}">${fmtIdr(bal)}</td></tr>`; html += `<tr id="evt-details-${eId}" class="hidden bg-white"><td colspan="4" class="p-0"><div class="bg-slate-50 py-2 px-4 md:px-8 border-b shadow-inner overflow-x-auto"><table class="w-full text-xs"><thead class="text-slate-400 border-b"><tr><th class="py-2 text-left w-1/3">Member Name</th><th class="py-2 text-right">Expected</th><th class="py-2 text-right">Cont. Paid</th><th class="py-2 text-right">Balance Memo</th><th class="py-2 text-right admin-only w-20">Del Due</th></tr></thead><tbody>${Object.values(ev.mems).map(m => { const mBal = m.due - m.paid; const delBtns = m.records.map(r => `<button onclick="deleteExpected('${r.id}')" title="Delete ₹${r.amt} due" class="text-rose-400 hover:text-rose-600 ml-2 admin-only"><i class="fas fa-trash-alt"></i></button>`).join(''); return `<tr class="border-b border-slate-100 hover:bg-slate-100"><td class="py-2 font-medium">${m.name}</td><td class="py-2 text-right text-slate-500">${fmtIdr(m.due)}</td><td class="py-2 text-right text-emerald-600">${fmtIdr(m.paid)}</td><td class="py-2 text-right font-bold ${mBal>0?'text-rose-500':'text-slate-400'}">${fmtIdr(mBal)}</td><td class="py-2 text-right whitespace-nowrap admin-only">${delBtns}</td></tr>` }).join('')}</tbody></table></div></td></tr>`; });
+    let html = ''; Object.keys(evtSummary).forEach(eId => { const ev = evtSummary[eId], bal = ev.due - ev.paid; html += `<tr class="bg-indigo-50 border-b border-indigo-100 cursor-pointer hover:bg-indigo-100 transition-colors" onclick="document.getElementById('evt-details-${eId}').classList.toggle('hidden')"><td class="px-3 py-3 text-xs md:text-sm font-bold text-indigo-800"><i class="fas fa-chevron-down mr-2 text-indigo-400 text-[10px]"></i> ${ev.name}</td><td class="px-3 py-3 text-xs md:text-sm text-right font-bold text-slate-700">${fmtIdr(ev.due)}</td><td class="px-3 py-3 text-xs md:text-sm text-right font-bold text-emerald-600">${fmtIdr(ev.paid)}</td><td class="px-3 py-3 text-xs md:text-sm text-right font-bold ${bal>0?'text-rose-600':'text-slate-500'}">${fmtIdr(bal)}</td></tr>`; html += `<tr id="evt-details-${eId}" class="hidden bg-white"><td colspan="4" class="p-0"><div class="bg-slate-50 py-2 px-2 md:px-8 border-b shadow-inner overflow-x-auto"><table class="w-full text-xs"><thead class="text-slate-400 border-b"><tr><th class="py-2 text-left w-1/3">Member Name</th><th class="py-2 text-right">Expected</th><th class="py-2 text-right">Cont. Paid</th><th class="py-2 text-right">Bal Memo</th><th class="py-2 text-right admin-only w-16">Del</th></tr></thead><tbody>${Object.values(ev.mems).map(m => { const mBal = m.due - m.paid; const delBtns = m.records.map(r => `<button onclick="deleteExpected('${r.id}', this)" title="Delete ₹${r.amt} due" class="text-rose-400 hover:text-rose-600 ml-2 admin-only"><i class="fas fa-trash-alt"></i></button>`).join(''); return `<tr class="border-b border-slate-100 hover:bg-slate-100"><td class="py-2 font-medium whitespace-normal leading-tight">${m.name}</td><td class="py-2 text-right text-slate-500">${fmtIdr(m.due)}</td><td class="py-2 text-right text-emerald-600">${fmtIdr(m.paid)}</td><td class="py-2 text-right font-bold ${mBal>0?'text-rose-500':'text-slate-400'}">${fmtIdr(mBal)}</td><td class="py-2 text-right whitespace-nowrap admin-only">${delBtns}</td></tr>` }).join('')}</tbody></table></div></td></tr>`; });
     document.getElementById('contrib-tbody').innerHTML = html || `<tr><td colspan="4" class="text-center py-8 text-slate-400">No expected dues found.</td></tr>`;
     document.querySelectorAll('.admin-only').forEach(el => el.style.display = userCtx.role === 2 ? '' : 'none');
 }
@@ -396,7 +382,7 @@ function renderContributions() {
 function renderDonations() {
     const tbody = document.getElementById('donations-tbody'), evtId = document.getElementById('donation-event-filter').value, catDonateId = appData.Categories.find(c => String(c.Name).toLowerCase().includes('donation'))?.ID;
     let html = '', total = 0;
-    [...appData.Ledger].filter(t => t.CategoryID === catDonateId && (evtId==='' || t.EventID === evtId)).sort((a,b)=>new Date(b.Date)-new Date(a.Date)).forEach(t => { const amt = parseFloat(t.Amount)||0; if (t.Type == 2) total += amt; else total -= amt; const ev = appData.Events.find(e=>e.ID===t.EventID)?.Name || '-'; const mem = t.MemberID === 'ANON' ? 'External / Anon' : (appData.Members.find(m=>m.ID===t.MemberID)?.Name || '-'); html += `<tr class="border-b border-slate-100 hover:bg-slate-50"><td class="px-6 py-3 font-mono text-xs text-slate-500">${t.Date}</td><td class="px-6 py-3 font-medium text-slate-700">${mem}</td><td class="px-6 py-3 text-xs text-slate-500">${ev}</td><td class="px-6 py-3 text-xs text-slate-400 truncate max-w-[200px]">${t.Notes||''}</td><td class="px-6 py-3 text-right font-bold text-fuchsia-600">${t.Type==1?'-':''}${fmtIdr(amt)}</td></tr>`; });
+    [...appData.Ledger].filter(t => t.CategoryID === catDonateId && (evtId==='' || t.EventID === evtId)).sort((a,b)=>new Date(b.Date)-new Date(a.Date)).forEach(t => { const amt = parseFloat(t.Amount)||0; if (t.Type == 2) total += amt; else total -= amt; const ev = appData.Events.find(e=>e.ID===t.EventID)?.Name || '-'; const mem = t.MemberID === 'ANON' ? 'External' : (appData.Members.find(m=>m.ID===t.MemberID)?.Name || '-'); html += `<tr class="border-b border-slate-100 hover:bg-slate-50"><td class="px-3 py-3 font-mono text-[10px] text-slate-500">${t.Date}</td><td class="px-3 py-3 text-xs md:text-sm font-medium text-slate-700 whitespace-normal leading-tight">${mem}</td><td class="px-3 py-3 text-[10px] md:text-xs text-slate-500">${ev}</td><td class="px-3 py-3 text-[10px] text-slate-400 whitespace-normal leading-tight">${t.Notes||''}</td><td class="px-3 py-3 text-xs md:text-sm text-right font-bold text-fuchsia-600">${t.Type==1?'-':''}${fmtIdr(amt)}</td></tr>`; });
     document.getElementById('donations-total-display').innerText = fmtIdr(total);
     tbody.innerHTML = html || `<tr><td colspan="5" class="text-center py-8 text-slate-400">No donations recorded.</td></tr>`;
 }
@@ -404,7 +390,7 @@ function renderDonations() {
 function renderLiabilities() {
     const tbody = document.getElementById('liabilities-tbody'); let memberAdvances = {}; appData.Members.forEach(m => memberAdvances[m.ID] = { name: m.Name, gen: 0, settled: 0, net: 0 });
     appData.Ledger.forEach(t => { if(!t.MemberID || t.MemberID === 'ANON') return; const cat = appData.Categories.find(c=>c.ID===t.CategoryID); if(cat && cat.Type === 'Liability' && memberAdvances[t.MemberID]) { const amt = parseFloat(t.Amount)||0; if(t.Type == 2) memberAdvances[t.MemberID].gen += amt; if(t.Type == 1) memberAdvances[t.MemberID].settled += amt; } });
-    let html = ''; Object.keys(memberAdvances).forEach(mId => { const a = memberAdvances[mId]; a.net = a.gen - a.settled; if (a.net !== 0 || a.gen > 0) { html += `<tr class="border-b border-slate-100 hover:bg-slate-50"><td class="px-6 py-3 font-medium text-slate-700">${a.name}</td><td class="px-6 py-3 text-right text-slate-500">${fmtIdr(a.gen)}</td><td class="px-6 py-3 text-right text-emerald-500">${fmtIdr(a.settled)}</td><td class="px-6 py-3 text-right font-bold ${a.net>0?'text-amber-600':(a.net<0?'text-rose-500':'text-slate-400')}">${fmtIdr(a.net)}</td></tr>`; } });
+    let html = ''; Object.keys(memberAdvances).forEach(mId => { const a = memberAdvances[mId]; a.net = a.gen - a.settled; if (a.net !== 0 || a.gen > 0) { html += `<tr class="border-b border-slate-100 hover:bg-slate-50"><td class="px-3 py-3 text-xs md:text-sm font-medium text-slate-700 whitespace-normal leading-tight">${a.name}</td><td class="px-3 py-3 text-[10px] md:text-sm text-right text-slate-500">${fmtIdr(a.gen)}</td><td class="px-3 py-3 text-[10px] md:text-sm text-right text-emerald-500">${fmtIdr(a.settled)}</td><td class="px-3 py-3 text-xs md:text-sm text-right font-bold ${a.net>0?'text-amber-600':(a.net<0?'text-rose-500':'text-slate-400')}">${fmtIdr(a.net)}</td></tr>`; } });
     tbody.innerHTML = html || `<tr><td colspan="4" class="text-center py-8 text-slate-400">No member advances found.</td></tr>`;
 }
 
@@ -423,7 +409,7 @@ function renderLedger() {
         const typeProfile = `<span class="text-emerald-500">Dr: ${drCount}</span> / <span class="text-rose-500">Cr: ${crCount}</span>`;
         const payload = btoa(unescape(encodeURIComponent(JSON.stringify(grpItems))));
         let editMode = vType.toLowerCase();
-        html += `<tr class="hover:bg-slate-50 cursor-pointer transition-colors border-b border-slate-100" onclick="showVoucherModal('${payload}')"><td class="px-6 py-4 text-xs text-slate-500">${t.Date}</td><td class="px-6 py-4"><span class="text-[10px] font-bold uppercase bg-${vSty}-100 text-${vSty}-700 px-2 py-1 rounded">${vType}</span><br><span class="font-mono text-[9px] text-slate-400 block mt-1">${t.GroupID}</span></td><td class="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase">${typeProfile}</td><td class="px-6 py-4 text-xs"><div class="font-medium text-slate-700 truncate max-w-[150px] md:max-w-xs">${particulars}</div><div class="text-slate-400 text-[10px] truncate max-w-[150px] md:max-w-xs mt-0.5">${grpItems[0].Notes || 'No Memo'}</div></td><td class="px-6 py-4 text-right font-black text-slate-700 text-lg">${fmtIdr(totAmt)}</td><td class="px-6 py-4 text-center admin-only" onclick="event.stopPropagation();"><button onclick="openSmartVoucher('${editMode}', '${t.GroupID}')" class="text-indigo-400 hover:text-indigo-700 p-2 border border-slate-200 rounded shadow-sm bg-white"><i class="fas fa-edit mr-1"></i>Edit</button></td></tr>`;
+        html += `<tr class="hover:bg-slate-50 cursor-pointer transition-colors border-b border-slate-100" onclick="showVoucherModal('${payload}')"><td class="px-3 py-3 text-[10px] text-slate-500 whitespace-nowrap">${t.Date}</td><td class="px-3 py-3"><span class="text-[9px] font-bold uppercase bg-${vSty}-100 text-${vSty}-700 px-2 py-0.5 rounded">${vType}</span><br><span class="font-mono text-[8px] text-slate-400 block mt-1">${t.GroupID}</span></td><td class="px-3 py-3 text-[9px] font-bold text-slate-500 uppercase">${typeProfile}</td><td class="px-3 py-3 text-xs md:text-sm"><div class="font-medium text-slate-700 whitespace-normal leading-tight">${particulars}</div><div class="text-slate-400 text-[10px] whitespace-normal leading-tight mt-0.5">${grpItems[0].Notes || ''}</div></td><td class="px-3 py-3 text-right font-black text-slate-700 text-sm md:text-lg">${fmtIdr(totAmt)}</td><td class="px-3 py-3 text-center admin-only" onclick="event.stopPropagation();"><button onclick="openSmartVoucher('${editMode}', '${t.GroupID}')" class="text-indigo-400 hover:text-indigo-700 p-2 border border-slate-200 rounded shadow-sm bg-white"><i class="fas fa-edit"></i></button></td></tr>`;
     });
     document.getElementById('ledger-tbody').innerHTML = html || `<tr><td colspan="6" class="text-center py-8 text-slate-400">No ledger entries.</td></tr>`;
     document.querySelectorAll('.admin-only').forEach(el => el.style.display = userCtx.role === 2 ? '' : 'none');
@@ -431,46 +417,65 @@ function renderLedger() {
 
 function showVoucherModal(b64) {
     const items = JSON.parse(decodeURIComponent(escape(atob(b64))));
-    let content = `<div class="overflow-x-auto w-full"><table class="w-full text-left text-sm whitespace-nowrap min-w-[500px]"><thead class="border-b bg-slate-50"><tr class="text-slate-500 text-[10px] uppercase tracking-wider"><th class="p-3 w-10">Dr/Cr</th><th class="p-3">Particulars</th><th class="p-3 text-right">Debit (₹)</th><th class="p-3 text-right">Credit (₹)</th></tr></thead><tbody class="divide-y divide-slate-100">`;
+    let content = `<div class="overflow-x-auto w-full"><table class="w-full text-left text-xs whitespace-nowrap min-w-[400px]"><thead class="border-b bg-slate-50"><tr class="text-slate-500 text-[9px] uppercase tracking-wider"><th class="p-2 w-10">Dr/Cr</th><th class="p-2">Particulars</th><th class="p-2 text-right">Debit (₹)</th><th class="p-2 text-right">Credit (₹)</th></tr></thead><tbody class="divide-y divide-slate-100">`;
     let tDr = 0, tCr = 0;
     items.forEach(i => {
         const c = appData.Categories.find(cat => cat.ID === i.CategoryID)?.Name || ''; const a = appData.Accounts.find(acc => acc.ID === i.AccountID)?.Name || ''; const m = i.MemberID && i.MemberID !== 'ANON' ? (appData.Members.find(mem=>mem.ID===i.MemberID)?.Name || '') : '';
         const amt = Math.abs(parseFloat(i.Amount)) || 0;
         let particulars = [a, c, m].filter(x=>x).join(' - '); if(!particulars) particulars = 'System Generated';
         if (i.Type == 1) tDr += amt; if (i.Type == 2) tCr += amt;
-        content += `<tr><td class="p-3 text-[10px] font-bold ${i.Type==1?'text-emerald-500':'text-rose-500'}">${i.Type==1?'Dr':'Cr'}</td><td class="p-3 text-xs text-slate-700 font-medium">${particulars}</td><td class="p-3 text-right font-bold text-emerald-600">${i.Type==1 ? fmtIdr(amt) : '-'}</td><td class="p-3 text-right font-bold text-rose-600">${i.Type==2 ? fmtIdr(amt) : '-'}</td></tr>`;
+        content += `<tr><td class="p-2 text-[10px] font-bold ${i.Type==1?'text-emerald-500':'text-rose-500'}">${i.Type==1?'Dr':'Cr'}</td><td class="p-2 text-xs text-slate-700 font-medium whitespace-normal leading-tight">${particulars}</td><td class="p-2 text-right font-bold text-emerald-600">${i.Type==1 ? fmtIdr(amt) : '-'}</td><td class="p-2 text-right font-bold text-rose-600">${i.Type==2 ? fmtIdr(amt) : '-'}</td></tr>`;
     });
-    content += `<tr class="bg-slate-50 border-t-2 border-slate-200"><td colspan="2" class="p-3 font-bold text-slate-700 text-right uppercase text-[10px]">Voucher Total</td><td class="p-3 text-right font-black text-emerald-700">${fmtIdr(tDr)}</td><td class="p-3 text-right font-black text-rose-700">${fmtIdr(tCr)}</td></tr></tbody></table></div>`;
+    content += `<tr class="bg-slate-50 border-t-2 border-slate-200"><td colspan="2" class="p-2 font-bold text-slate-700 text-right uppercase text-[10px]">Voucher Total</td><td class="p-2 text-right font-black text-emerald-700">${fmtIdr(tDr)}</td><td class="p-2 text-right font-black text-rose-700">${fmtIdr(tCr)}</td></tr></tbody></table></div>`;
     const vMemo = items[0].Notes || 'No general memo.'; content += `<div class="mt-4 p-3 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-800"><span class="font-bold uppercase tracking-wider mr-2 text-[10px]">Narration:</span> ${vMemo}</div>`;
-    document.getElementById('details-title').innerText = `Voucher Breakdown: ${items[0].GroupID}`; document.getElementById('details-content').innerHTML = content;
+    document.getElementById('details-title').innerText = `Breakdown: ${items[0].GroupID}`; document.getElementById('details-content').innerHTML = content;
     openModal('modal-details'); 
 }
 
-function showDetailsModal(title, b64Data) {
-    const dataStr = decodeURIComponent(escape(atob(b64Data))); let content = '';
-    try {
-        const obj = JSON.parse(dataStr);
-        content = '<div class="overflow-x-auto"><table class="w-full text-left text-xs"><tbody class="divide-y divide-slate-100">';
-        for (let key in obj) { content += `<tr><td class="py-2 pr-4 font-bold text-slate-500 whitespace-nowrap">${key}</td><td class="py-2 font-mono text-slate-800 break-all">${obj[key]}</td></tr>`; }
-        content += '</tbody></table></div>';
-    } catch(e) { content = `<div class="p-4 text-sm font-mono text-slate-700 whitespace-pre-wrap break-all">${dataStr}</div>`; }
-    document.getElementById('details-title').innerText = title; document.getElementById('details-content').innerHTML = content; openModal('modal-details');
-}
-
 // --- REPORTING SYSTEM (Date Ranges Added) ---
-function onReportTypeChange() {
-    const type = document.getElementById('reportSelector').value, paramSel = document.getElementById('reportParam'), wrapper = document.getElementById('reportParamWrapper'), label = document.getElementById('reportParamLabel');
-    document.getElementById('report-container').innerHTML = '<div class="h-full flex flex-col items-center justify-center text-slate-400 bg-white border border-dashed border-slate-200 rounded-2xl"><i class="fas fa-file-invoice-dollar text-4xl mb-3 text-slate-200"></i><p>Select report settings to generate.</p></div>';
+function renderAccountStatement(accId, fromDate, toDate) {
+    const accObj = appData.Accounts.find(a=>a.ID===accId);
+    let opBal = 0, bal = 0, rowsHtml = '';
     
-    if (type === 'stmt') {
-        wrapper.classList.remove('hidden'); label.innerText = "Select Account";
-        paramSel.innerHTML = '<option value="">-- Choose Account --</option>' + appData.Accounts.map(a => `<option value="${a.ID}">${a.Name} (${a.Type==2?'Bank':'Cash'})</option>`).join('');
-    } else if (type === 'adv-stmt') {
-        wrapper.classList.remove('hidden'); label.innerText = "Select Member";
-        paramSel.innerHTML = '<option value="">-- Choose Member --</option>' + appData.Members.map(m=>`<option value="${m.ID}">${m.Name}</option>`).join('');
-    } else if (type === 'bs' || type === 'ine') { 
-        wrapper.classList.add('hidden'); runReport(); 
-    } else { wrapper.classList.add('hidden'); }
+    if (fromDate) {
+        appData.Ledger.filter(t => t.AccountID === accId && t.Date < fromDate).forEach(t => { opBal += (t.Type == 1 ? Math.abs(t.Amount) : -Math.abs(t.Amount)); });
+        bal = opBal;
+        rowsHtml += `<tr class="bg-indigo-50/50 text-xs font-bold border-b border-indigo-100"><td class="py-3 px-3">${fromDate}</td><td class="py-3 px-3 text-indigo-700" colspan="2">Opening Balance Brought Forward</td><td class="py-3 px-3 text-right text-indigo-700 text-sm">${fmtIdr(opBal)}</td></tr>`;
+    }
+
+    const accLedger = appData.Ledger.filter(t => t.AccountID === accId && (!fromDate || t.Date >= fromDate) && (!toDate || t.Date <= toDate));
+    const grpIds = [...new Set(accLedger.map(t => t.GroupID))];
+    const grps = grpIds.map(gId => appData.Ledger.filter(t => t.GroupID === gId)).sort((a,b) => new Date(a[0].Date) - new Date(b[0].Date));
+    
+    grps.forEach(grp => {
+        let dr = 0, cr = 0;
+        const myLines = grp.filter(t => t.AccountID === accId);
+        const otherLines = grp.filter(t => t.AccountID !== accId);
+        
+        if(myLines.length === 0) return;
+
+        // Splitting 1-to-N compound journal entries into distinct statement rows
+        if (myLines.length === 1 && otherLines.length > 0) {
+            const myType = myLines[0].Type;
+            otherLines.forEach(opp => {
+                let amt = Math.abs(parseFloat(opp.Amount));
+                if (amt === 0) return;
+                let lDr = myType == 1 ? amt : 0; let lCr = myType == 2 ? amt : 0;
+                bal += (lDr - lCr);
+                const cat = appData.Categories.find(c=>c.ID===opp.CategoryID)?.Name; const acc = appData.Accounts.find(a=>a.ID===opp.AccountID)?.Name; const mem = opp.MemberID && opp.MemberID !== 'ANON' ? appData.Members.find(m=>m.ID===opp.MemberID)?.Name : '';
+                const ref = [acc, cat, mem].filter(x=>x).join(' | ') || 'Journal Transfer';
+                rowsHtml += `<tr class="border-b border-slate-100 hover:bg-slate-50 text-xs"><td class="py-3 px-3 whitespace-nowrap text-[10px] text-slate-500">${grp[0].Date}</td><td class="py-3 px-3 text-slate-700 font-medium whitespace-normal leading-tight"><div class="font-bold">${ref}</div><div class="text-[10px] text-slate-400 mt-0.5">${grp[0].Notes||''}</div></td><td class="py-3 px-3 text-right text-emerald-600 font-bold">${lDr > 0 ? fmtIdr(lDr) : '-'}</td><td class="py-3 px-3 text-right text-rose-600 font-bold">${lCr > 0 ? fmtIdr(lCr) : '-'}</td><td class="py-3 px-3 text-right font-bold text-slate-800 text-sm">${fmtIdr(bal)}</td></tr>`;
+            });
+        } else {
+            // Complex N-to-N entry fallback
+            grp.forEach(t => { if(t.AccountID === accId) { if(t.Type == 1) dr += Math.abs(parseFloat(t.Amount)); if(t.Type == 2) cr += Math.abs(parseFloat(t.Amount)); } });
+            bal += (dr - cr);
+            rowsHtml += `<tr class="border-b border-slate-100 hover:bg-slate-50 text-xs"><td class="py-3 px-3 whitespace-nowrap text-[10px] text-slate-500">${grp[0].Date}</td><td class="py-3 px-3 text-slate-700 font-medium whitespace-normal leading-tight"><div class="font-bold">Multiple / Complex Entry</div><div class="text-[10px] text-slate-400 mt-0.5">${grp[0].Notes||''}</div></td><td class="py-3 px-3 text-right text-emerald-600 font-bold">${dr > 0 ? fmtIdr(dr) : '-'}</td><td class="py-3 px-3 text-right text-rose-600 font-bold">${cr > 0 ? fmtIdr(cr) : '-'}</td><td class="py-3 px-3 text-right font-bold text-slate-800 text-sm">${fmtIdr(bal)}</td></tr>`;
+        }
+    });
+    document.getElementById('report-container').innerHTML = `
+    <div class="mb-4 flex items-center justify-between"><h3 class="font-black text-slate-700 uppercase tracking-wider text-sm"><i class="fas fa-file-invoice mr-2 text-indigo-500"></i> Statement: ${accObj.Name}</h3><span class="bg-indigo-50 text-indigo-700 px-3 py-1 rounded-lg text-xs font-bold shadow-sm">Closing: ${fmtIdr(bal)}</span></div>
+    <div class="overflow-x-auto"><table class="w-full text-left min-w-[500px] bg-white rounded-xl shadow-sm border border-slate-100"><thead class="bg-slate-50 border-b border-slate-100 sticky top-0"><tr class="text-[10px] text-slate-500 uppercase tracking-wider"><th class="py-3 px-3">Date</th><th class="py-3 px-3">Particulars / Narration</th><th class="py-3 px-3 text-right">Debit (In)</th><th class="py-3 px-3 text-right">Credit (Out)</th><th class="py-3 px-3 text-right">Balance</th></tr></thead><tbody>${rowsHtml || '<tr><td colspan="5" class="py-8 text-center text-slate-400">No transactions recorded in this period.</td></tr>'}</tbody></table></div>`;
 }
 
 function runReport() {
