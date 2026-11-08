@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FamLedger Pro - Secure</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f1f5f9; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .nav-item.active { background-color: #e0e7ff; color: #4338ca; border-right: 4px solid #4338ca; font-weight: 600; }
+        .nav-item { border-right: 4px solid transparent; color: #475569; }
+        .nav-item:hover:not(.active) { background-color: #f8fafc; color: #334155; }
+        .modal { transition: opacity 0.2s ease, transform 0.2s ease; }
+        .modal.hidden { opacity: 0; pointer-events: none; transform: scale(0.95); }
+        .modal.visible { opacity: 1; pointer-events: auto; transform: scale(1); }
+        #mobile-overlay.active { display: block; }
+    </style>
+</head>
+<body class="flex h-screen overflow-hidden text-slate-800">
+
+    <!-- Primary Login Gate -->
+    <div id="authGate" class="fixed inset-0 bg-slate-900/80 z-[300] flex items-center justify-center p-4">
+        <div class="text-center p-8 bg-white rounded-3xl shadow-2xl max-w-sm w-full">
+            <div class="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-4"><i class="fas fa-lock text-2xl text-indigo-600"></i></div>
+            <h2 class="text-2xl font-black text-slate-800 mb-2 tracking-tight">FamLedger Login</h2>
+            <p id="loginError" class="text-rose-500 mb-6 text-sm font-medium h-4"></p>
+            <form onsubmit="executeLogin(event)">
+                <input type="text" id="loginUsername" placeholder="Username" required class="w-full border-2 border-slate-200 rounded-xl px-4 py-3 mb-4 text-center font-bold outline-none focus:border-indigo-500 transition-colors">
+                <input type="password" id="loginPassword" placeholder="Password" required class="w-full border-2 border-slate-200 rounded-xl px-4 py-3 mb-6 text-center tracking-[0.2em] font-black outline-none focus:border-indigo-500 transition-colors">
+                <button type="submit" id="loginBtn" class="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all flex justify-center items-center gap-2"><span>Unlock Ledger</span></button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Re-Auth Modal -->
+    <div id="reAuthGate" class="modal hidden fixed inset-0 bg-slate-900/90 z-[999] flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="text-center p-8 bg-white rounded-3xl shadow-2xl max-w-sm w-full border-4 border-amber-400">
+            <div class="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4"><i class="fas fa-hourglass-end text-2xl text-amber-600"></i></div>
+            <h2 class="text-xl font-black text-slate-800 mb-2">Session Expired</h2>
+            <p class="text-slate-500 mb-6 text-xs font-medium">To protect your unsaved data, please re-enter your password to seamlessly resume your task.</p>
+            <p id="reauthError" class="text-rose-500 mb-4 text-xs font-bold h-4"></p>
+            <form onsubmit="executeReAuth(event)">
+                <input type="password" id="reauthPassword" placeholder="Password" required class="w-full border-2 border-slate-200 rounded-xl px-4 py-3 mb-6 text-center tracking-[0.2em] font-black outline-none focus:border-amber-500 transition-colors">
+                <button type="submit" id="reauthBtn" class="w-full bg-amber-500 text-white py-3.5 rounded-xl font-bold shadow-lg shadow-amber-200 hover:bg-amber-600 transition-all">Resume Action</button>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Custom Confirm Modal -->
+    <div id="modal-confirm" class="modal hidden fixed inset-0 bg-slate-900/60 z-[1000] flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden transform transition-all">
+            <div class="p-6 text-center">
+                <div class="w-16 h-16 bg-rose-100 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-2xl"><i class="fas fa-exclamation-triangle"></i></div>
+                <h3 class="text-lg font-black text-slate-800 mb-2" id="confirm-title">Are you sure?</h3>
+                <p class="text-sm text-slate-500 font-medium" id="confirm-msg">This action cannot be undone.</p>
+            </div>
+            <div class="p-4 bg-slate-50 border-t border-slate-100 flex gap-3">
+                <button id="btn-confirm-cancel" class="flex-1 py-2.5 rounded-xl font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100">Cancel</button>
+                <button id="btn-confirm-ok" class="flex-1 py-2.5 rounded-xl font-bold text-white bg-rose-600 shadow-md hover:bg-rose-700">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed top-4 right-4 z-[100] transform transition-all duration-300 translate-x-full opacity-0 bg-slate-900 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3">
+        <i class="fas fa-check-circle text-emerald-400 text-xl" id="toast-icon"></i>
+        <div><h4 class="font-bold text-sm" id="toast-title">Success</h4><p class="text-xs text-slate-300" id="toast-msg">...</p></div>
+    </div>
+
+    <div id="mobile-overlay" class="hidden fixed inset-0 bg-slate-900/50 z-30 md:hidden" onclick="toggleSidebar()"></div>
+
+    <!-- Sidebar -->
+    <aside id="sidebar" class="fixed inset-y-0 left-0 transform -translate-x-full md:relative md:translate-x-0 transition-transform duration-300 w-64 bg-white flex flex-col h-full shadow-2xl md:shadow-lg z-40 shrink-0 border-r border-slate-200">
+        <div class="p-6 flex justify-between items-center border-b border-slate-100">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-gradient-to-br from-indigo-600 to-blue-600 rounded-xl flex items-center justify-center text-white shadow-md"><i class="fas fa-landmark text-lg"></i></div>
+                <div><h1 class="text-lg font-black text-slate-800 tracking-tight">FamLedger</h1><p class="text-[10px] text-indigo-600 uppercase tracking-widest font-bold">Secure V4</p></div>
+            </div>
+            <button class="md:hidden text-slate-400" onclick="toggleSidebar()"><i class="fas fa-times text-xl"></i></button>
+        </div>
+        <nav class="flex-1 py-4 overflow-y-auto no-scrollbar flex flex-col gap-1">
+            <button onclick="switchTab('dashboard')" id="nav-dashboard" class="nav-item active w-full flex items-center gap-3 px-6 py-3 text-left transition-colors text-sm"><i class="fas fa-chart-pie w-5 text-center"></i> Dashboard</button>
+            <button onclick="switchTab('members')" id="nav-members" class="nav-item w-full flex items-center gap-3 px-6 py-3 text-left transition-colors text-sm"><i class="fas fa-users w-5 text-center"></i> Directory & Security</button>
+            <div class="px-6 py-2 mt-2"><span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Accounting</span></div>
+            <button onclick="switchTab('contributions')" id="nav-contributions" class="nav-item w-full flex items-center gap-3 px-6 py-3 text-left transition-colors text-sm"><i class="fas fa-bullseye w-5 text-center"></i> Contributions (Dues)</button>
+            <button onclick="switchTab('donations')" id="nav-donations" class="nav-item w-full flex items-center gap-3 px-6 py-3 text-left transition-colors text-sm"><i class="fas fa-gift w-5 text-center text-rose-500"></i> Donations & Sponsors</button>
+            <button onclick="switchTab('liabilities')" id="nav-liabilities" class="nav-item w-full flex items-center gap-3 px-6 py-3 text-left transition-colors text-sm"><i class="fas fa-hand-holding-water w-5 text-center text-amber-600"></i> Advances & Payables</button>
+            <button onclick="switchTab('ledger')" id="nav-ledger" class="nav-item w-full flex items-center gap-3 px-6 py-3 text-left transition-colors text-sm"><i class="fas fa-book w-5 text-center"></i> Main Ledger</button>
+            <button onclick="switchTab('reports')" id="nav-reports" class="nav-item w-full flex items-center gap-3 px-6 py-3 text-left transition-colors text-sm"><i class="fas fa-file-invoice-dollar w-5 text-center"></i> Financial Reports</button>
+            <div class="px-6 py-2 mt-2 admin-only"><span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">System</span></div>
+            <button onclick="switchTab('masterdata')" id="nav-masterdata" class="nav-item w-full flex items-center gap-3 px-6 py-3 text-left transition-colors text-sm admin-only"><i class="fas fa-cogs w-5 text-center"></i> Master Data</button>
+            <button onclick="switchTab('audit')" id="nav-audit" class="nav-item w-full flex items-center gap-3 px-6 py-3 text-left transition-colors text-sm admin-only"><i class="fas fa-shield-alt w-5 text-center"></i> Audit Log</button>
+        </nav>
+        <div class="p-4 border-t border-slate-100 bg-slate-50">
+            <div class="flex items-center gap-3 mb-3">
+                <div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold"><i class="fas fa-user text-xs"></i></div>
+                <div class="overflow-hidden flex-1">
+                    <p class="text-[10px] text-slate-500 uppercase font-bold" id="user-role-badge">Role</p>
+                    <p class="text-sm font-semibold text-slate-800 truncate" id="user-name">Guest</p>
+                </div>
+            </div>
+            <button onclick="logout()" class="w-full text-xs text-slate-500 font-bold hover:text-rose-600 transition-colors border border-slate-200 rounded py-2 bg-white shadow-sm"><i class="fas fa-sign-out-alt mr-1"></i> Lock App</button>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col h-full relative overflow-hidden w-full">
+        <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 md:px-8 z-10 shrink-0 shadow-sm">
+            <div class="flex items-center gap-4">
+                <button class="md:hidden text-slate-600 p-2" onclick="toggleSidebar()"><i class="fas fa-bars text-xl"></i></button>
+                <h2 id="page-title" class="text-lg md:text-xl font-bold text-slate-800">Dashboard</h2>
+                <div id="sync-loader" class="hidden items-center gap-2 px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-[10px] font-bold uppercase tracking-wider"><i class="fas fa-sync-alt fa-spin"></i> Syncing</div>
+            </div>
+            <button onclick="loadAllData(false)" class="text-sm font-medium text-slate-500 hover:text-indigo-600 transition-colors"><i class="fas fa-redo-alt mr-1"></i> Refresh</button>
+        </header>
+
+        <div class="flex-1 overflow-y-auto p-4 md:p-8 no-scrollbar relative w-full">
+            
+            <!-- VIEW: DASHBOARD -->
+            <div id="view-dashboard" class="space-y-6 block">
+                <div class="grid grid-cols-2 lg:grid-cols-6 gap-4">
+                    <div onclick="openAccountDrilldown(1)" class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col cursor-pointer hover:border-emerald-300 transition-all">
+                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Cash <i class="fas fa-search ml-1"></i></span><h3 id="dash-cash" class="text-xl font-black text-slate-800 mt-1">₹0</h3>
+                    </div>
+                    <div onclick="openAccountDrilldown(2)" class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col cursor-pointer hover:border-blue-300 transition-all">
+                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Bank <i class="fas fa-search ml-1"></i></span><h3 id="dash-bank" class="text-xl font-black text-slate-800 mt-1">₹0</h3>
+                    </div>
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col">
+                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Expenses</span><h3 id="dash-expenses" class="text-xl font-black text-rose-600 mt-1">₹0</h3>
+                    </div>
+                    <div onclick="switchTab('liabilities')" class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col cursor-pointer hover:border-amber-300 transition-all">
+                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Advances/Payables</span><h3 id="dash-payables" class="text-xl font-black text-amber-600 mt-1">₹0</h3>
+                    </div>
+                    <div onclick="switchTab('contributions')" class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col cursor-pointer hover:border-indigo-300 transition-all">
+                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Contrib. Received</span><h3 id="dash-contrib" class="text-xl font-black text-indigo-600 mt-1">₹0</h3>
+                    </div>
+                    <div onclick="switchTab('donations')" class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col cursor-pointer hover:border-fuchsia-300 transition-all">
+                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Donations Rec.</span><h3 id="dash-donation" class="text-xl font-black text-fuchsia-600 mt-1">₹0</h3>
+                    </div>
+                </div>
+                
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col max-h-96">
+                        <h3 class="font-bold text-slate-700 mb-4 shrink-0"><i class="fas fa-history mr-2 text-indigo-400"></i>Recent Activity</h3>
+                        <div class="overflow-y-auto no-scrollbar flex-1"><table class="w-full text-left text-sm whitespace-nowrap"><thead class="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-400 sticky top-0"><tr class="border-b border-slate-100"><th class="py-2 px-2">Date</th><th class="py-2 px-2">Particulars (Voucher)</th><th class="py-2 px-2 text-right">Amount</th></tr></thead><tbody id="dash-recent-tbody" class="divide-y divide-slate-50"></tbody></table></div>
+                    </div>
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col max-h-96">
+                        <h3 class="font-bold text-slate-700 mb-4 shrink-0"><i class="fas fa-calendar-alt mr-2 text-fuchsia-400"></i>Event Financial Summary</h3>
+                        <div class="overflow-y-auto no-scrollbar flex-1"><table class="w-full text-left text-sm whitespace-nowrap"><thead class="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-400 sticky top-0"><tr class="border-b border-slate-100"><th class="py-2 px-2">Event</th><th class="py-2 px-2 text-right text-emerald-500">Income</th><th class="py-2 px-2 text-right text-rose-500">Expense</th><th class="py-2 px-2 text-right">Surplus/Def</th></tr></thead><tbody id="dash-events-tbody" class="divide-y divide-slate-50"></tbody></table></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW: MEMBERS -->
+            <div id="view-members" class="hidden space-y-4 h-full flex flex-col w-full">
+                <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                    <input type="text" id="search-member" placeholder="Search Directory..." class="w-full md:w-64 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none shadow-sm" oninput="renderMembers()">
+                    <button onclick="openAddMemberModal()" class="admin-only w-full md:w-auto bg-indigo-600 text-white text-sm font-medium py-2 px-5 rounded-xl shadow-sm hover:bg-indigo-700 transition-colors"><i class="fas fa-user-plus mr-1"></i> Add Member</button>
+                </div>
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-x-auto flex-1 no-scrollbar w-full">
+                    <table class="w-full text-left text-sm whitespace-nowrap"><thead class="bg-slate-50 text-slate-400 font-bold uppercase tracking-wider text-[10px]"><tr class="border-b"><th class="px-6 py-4">ID</th><th class="px-6 py-4">Name & Email</th><th class="px-6 py-4">System Auth</th><th class="px-6 py-4 text-center admin-only">Manage</th></tr></thead><tbody id="member-tbody" class="divide-y divide-slate-50"></tbody></table>
+                </div>
+            </div>
+
+            <!-- VIEW: EXPECTED CONTRIBUTIONS -->
+            <div id="view-contributions" class="hidden space-y-4 h-full flex flex-col w-full">
+                <div class="bg-blue-50 text-blue-800 text-xs p-3 rounded-xl flex gap-2"><i class="fas fa-info-circle mt-0.5"></i><p><b>Dues Only:</b> This compares Expected vs Paid Contributions.</p></div>
+                <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                    <select id="contrib-event-filter" class="w-full md:w-auto border rounded-xl px-4 py-2 text-sm bg-white dropdown-events" onchange="renderContributions()"><option value="">-- All Events --</option></select>
+                    <div class="flex gap-2 admin-only w-full md:w-auto">
+                        <button onclick="openBulkContribModal()" class="flex-1 bg-white border text-slate-700 text-sm font-medium py-2 px-5 rounded-xl shadow-sm hover:bg-slate-50 transition-colors"><i class="fas fa-tasks mr-1"></i> Bulk Assign</button>
+                        <button onclick="openModal('modal-contrib'); document.getElementById('form-contrib').reset(); document.getElementById('exp-id').value='';" class="flex-1 bg-indigo-600 text-white text-sm font-medium py-2 px-5 rounded-xl shadow-sm hover:bg-indigo-700 transition-colors"><i class="fas fa-plus mr-1"></i> Set Due</button>
+                    </div>
+                </div>
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-x-auto flex-1 no-scrollbar w-full">
+                    <table class="w-full text-left text-sm whitespace-nowrap"><thead class="bg-slate-50 text-slate-400 font-bold uppercase text-[10px]"><tr class="border-b"><th class="px-6 py-4">Event</th><th class="px-6 py-4 text-right">Expected (Due)</th><th class="px-6 py-4 text-right">Cont. Paid</th><th class="px-6 py-4 text-right">Balance Memo</th></tr></thead><tbody id="contrib-tbody" class="divide-y divide-slate-50"></tbody></table>
+                </div>
+            </div>
+
+            <!-- VIEW: DONATIONS -->
+            <div id="view-donations" class="hidden space-y-4 h-full flex flex-col w-full">
+                <div class="flex justify-between items-center gap-4"><select id="donation-event-filter" class="w-full md:w-auto border rounded-xl px-4 py-2 text-sm bg-white dropdown-events" onchange="renderDonations()"><option value="">-- All Events --</option></select></div>
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden flex-1 flex flex-col w-full">
+                    <div class="p-4 bg-fuchsia-50 border-b border-fuchsia-100 flex justify-between items-center shrink-0"><h3 class="font-bold text-fuchsia-800 uppercase tracking-wider text-xs">Total Donations</h3><h3 class="font-black text-fuchsia-700 text-xl" id="donations-total-display">₹0</h3></div>
+                    <div class="flex-1 overflow-x-auto no-scrollbar w-full"><table class="w-full text-left text-sm whitespace-nowrap"><thead class="bg-slate-50 text-slate-400 font-bold uppercase text-[10px]"><tr class="border-b"><th class="px-6 py-4">Date</th><th class="px-6 py-4">Sponsor/Member</th><th class="px-6 py-4">Event</th><th class="px-6 py-4">Notes</th><th class="px-6 py-4 text-right">Amount</th></tr></thead><tbody id="donations-tbody" class="divide-y divide-slate-50"></tbody></table></div>
+                </div>
+            </div>
+
+            <!-- VIEW: ADVANCES & PAYABLES -->
+            <div id="view-liabilities" class="hidden space-y-4 h-full flex flex-col w-full">
+                <div class="bg-amber-50 text-amber-800 text-xs p-3 rounded-xl flex gap-2"><i class="fas fa-handshake mt-0.5"></i><p><b>Member Advances:</b> Track overpayments and settle via Cash/Bank or set-off.</p></div>
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-x-auto flex-1 no-scrollbar w-full">
+                    <table class="w-full text-left text-sm whitespace-nowrap"><thead class="bg-slate-50 text-slate-400 font-bold uppercase text-[10px]"><tr class="border-b"><th class="px-6 py-4">Member Name</th><th class="px-6 py-4 text-right">Total Advanced</th><th class="px-6 py-4 text-right">Settled/Adjusted</th><th class="px-6 py-4 text-right">Net Payable</th></tr></thead><tbody id="liabilities-tbody" class="divide-y divide-slate-50"></tbody></table>
+                </div>
+            </div>
+
+            <!-- VIEW: LEDGER (I&E) -->
+            <div id="view-ledger" class="hidden space-y-4 h-full flex flex-col w-full">
+                <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                    <div class="flex flex-col md:flex-row gap-2 w-full md:w-auto">
+                        <select id="ledger-filter-type" class="w-full md:w-auto border rounded-xl px-4 py-2 text-sm bg-white" onchange="renderLedger()"><option value="All">All Entries</option><option value="1">Receipts (Dr)</option><option value="2">Payments (Cr)</option><option value="3">Journals</option></select>
+                        <select id="ledger-filter-event" class="w-full md:w-auto border rounded-xl px-4 py-2 text-sm bg-white dropdown-events" onchange="renderLedger()"><option value="">All Events</option></select>
+                    </div>
+                    <div class="flex flex-wrap gap-2 admin-only w-full md:w-auto">
+                        <button onclick="openSmartVoucher('receipt')" class="flex-1 bg-emerald-600 text-white text-xs font-bold py-2 px-4 rounded-xl shadow-sm hover:bg-emerald-700 transition-colors"><i class="fas fa-arrow-down mr-1"></i> Receipt</button>
+                        <button onclick="openSmartVoucher('payment')" class="flex-1 bg-rose-600 text-white text-xs font-bold py-2 px-4 rounded-xl shadow-sm hover:bg-rose-700 transition-colors"><i class="fas fa-arrow-up mr-1"></i> Payment</button>
+                        <button onclick="openSmartVoucher('journal')" class="flex-1 bg-indigo-600 text-white text-xs font-bold py-2 px-4 rounded-xl shadow-sm hover:bg-indigo-700 transition-colors"><i class="fas fa-random mr-1"></i> Journal</button>
+                    </div>
+                </div>
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-x-auto flex-1 no-scrollbar w-full">
+                    <table class="w-full text-left text-sm whitespace-nowrap"><thead class="bg-slate-50 text-slate-400 font-bold uppercase text-[10px]"><tr class="border-b"><th class="px-6 py-4">Date</th><th class="px-6 py-4">Voucher</th><th class="px-6 py-4">Dr/Cr Summary</th><th class="px-6 py-4">Particulars</th><th class="px-6 py-4 text-right">Amount</th><th class="px-6 py-4 text-center admin-only">Edit</th></tr></thead><tbody id="ledger-tbody" class="divide-y divide-slate-50"></tbody></table>
+                </div>
+            </div>
+
+            <!-- VIEW: REPORTS -->
+            <div id="view-reports" class="hidden space-y-6 h-full flex flex-col w-full">
+                <!-- Report Settings Card -->
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 shrink-0">
+                    <div class="flex flex-col md:flex-row gap-4 items-end">
+                        <div class="w-full md:w-1/5">
+                            <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">From Date</label>
+                            <input type="date" id="report-from" class="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 font-bold text-slate-700 bg-white outline-none focus:border-indigo-500 transition-colors" onchange="runReport()">
+                        </div>
+                        <div class="w-full md:w-1/5">
+                            <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">To Date</label>
+                            <input type="date" id="report-to" class="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 font-bold text-slate-700 bg-white outline-none focus:border-indigo-500 transition-colors" onchange="runReport()">
+                        </div>
+                        <div class="flex-1 w-full">
+                            <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Report Generator</label>
+                            <select id="reportSelector" class="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 font-bold text-slate-700 bg-white outline-none focus:border-indigo-500 transition-colors" onchange="onReportTypeChange()">
+                                <option value="">-- Choose Report --</option>
+                                <option value="bs">Balance Sheet (Assets & Liab)</option>
+                                <option value="ine">Income & Expenditure Statement</option>
+                                <option value="stmt">Account / Bank Statement</option>
+                                <option value="adv-stmt">Member Advance Statement</option>
+                            </select>
+                        </div>
+                        <div id="reportParamWrapper" class="flex-1 w-full hidden">
+                            <label id="reportParamLabel" class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Parameters</label>
+                            <select id="reportParam" class="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 font-bold text-slate-700 bg-white outline-none focus:border-indigo-500 transition-colors" onchange="runReport()"></select>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Report Canvas -->
+                <div class="flex-1 overflow-x-auto font-mono text-sm relative w-full">
+                    <div id="report-container" class="min-w-[600px] h-full flex flex-col"><div class="h-full flex flex-col items-center justify-center text-slate-400 bg-white border border-dashed border-slate-200 rounded-2xl"><i class="fas fa-file-invoice-dollar text-4xl mb-3 text-slate-200"></i><p>Select report settings to generate.</p></div></div>
+                </div>
+            </div>
+
+            <!-- VIEW: MASTER DATA & AUDIT -->
+            <div id="view-masterdata" class="hidden space-y-6 w-full">
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-start">
+                    <div class="bg-white rounded-2xl border shadow-sm flex flex-col max-h-[70vh]"><div class="p-4 bg-slate-50 flex justify-between items-center border-b"> <h3 class="font-bold text-slate-700">Accounts</h3><button onclick="openModal('modal-account')" class="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded font-bold"><i class="fas fa-plus"></i></button></div><ul id="list-accounts" class="divide-y divide-slate-50 overflow-y-auto p-2"></ul></div>
+                    <div class="bg-white rounded-2xl border shadow-sm flex flex-col max-h-[70vh]"><div class="p-4 bg-slate-50 flex justify-between items-center border-b"> <h3 class="font-bold text-slate-700">I&E Categories</h3><button onclick="openModal('modal-category')" class="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded font-bold"><i class="fas fa-plus"></i></button></div><ul id="list-categories" class="divide-y divide-slate-50 overflow-y-auto p-2"></ul></div>
+                    <div class="bg-white rounded-2xl border shadow-sm flex flex-col max-h-[70vh]"><div class="p-4 bg-slate-50 flex justify-between items-center border-b"> <h3 class="font-bold text-slate-700">Events</h3><button onclick="openModal('modal-event')" class="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded font-bold"><i class="fas fa-plus"></i></button></div><ul id="list-events" class="divide-y divide-slate-50 overflow-y-auto p-2"></ul></div>
+                    <div class="bg-white rounded-2xl border shadow-sm flex flex-col max-h-[70vh]"><div class="p-4 bg-slate-50 flex justify-between items-center border-b"> <h3 class="font-bold text-slate-700">Custom Fields</h3><button onclick="openModal('modal-config')" class="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded font-bold"><i class="fas fa-plus"></i></button></div><ul id="list-configs" class="divide-y divide-slate-50 overflow-y-auto p-2"></ul></div>
+                </div>
+            </div>
+
+            <div id="view-audit" class="hidden space-y-4 h-full flex flex-col w-full">
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-x-auto flex-1 no-scrollbar w-full">
+                    <table class="w-full text-left text-sm whitespace-nowrap"><thead class="bg-slate-50 text-slate-400 font-bold uppercase text-[10px]"><tr class="border-b"><th class="px-6 py-4">Timestamp</th><th class="px-6 py-4">Action</th><th class="px-6 py-4">User</th><th class="px-6 py-4">Table</th><th class="px-6 py-4">Record ID</th></tr></thead><tbody id="audit-tbody" class="divide-y divide-slate-50"></tbody></table>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- ================= MODALS ================= -->
+
+    <!-- Smart Voucher Modal -->
+    <div id="modal-smart-voucher" class="modal hidden fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-2 md:p-4 backdrop-blur-sm">
+        <form id="form-smart-voucher" class="bg-white w-full max-w-4xl rounded-2xl shadow-2xl flex flex-col max-h-[95vh]" onsubmit="executeApiAction(event, 'saveVoucher', buildVoucherPayload())">
+            <div class="p-4 md:p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-2xl">
+                <div><h3 class="font-black text-lg text-slate-800" id="smart-vouch-title">Post Transaction</h3><p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1" id="smart-vouch-subtitle">Multi-Line Entry</p></div>
+                <button type="button" onclick="closeModal('modal-smart-voucher')" class="text-slate-400 hover:text-rose-500"><i class="fas fa-times text-xl"></i></button>
+            </div>
+            <div class="p-4 bg-slate-100 border-b border-slate-200 flex flex-col md:flex-row gap-4 shrink-0">
+                <input type="hidden" id="smart-vouch-mode" value=""><input type="hidden" id="smart-vouch-edit-id" value="">
+                <div class="w-full md:w-auto"><label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Date</label><input type="date" id="smart-vouch-date" required class="w-full border rounded-xl px-4 py-2 text-sm bg-white shadow-sm outline-none"></div>
+                <div id="smart-vouch-main-acc-wrapper" class="w-full md:w-64"><label class="block text-[10px] font-bold text-slate-500 uppercase mb-1" id="smart-vouch-acc-label">Account</label><select id="smart-vouch-main-acc" class="w-full border rounded-xl px-4 py-2 text-sm bg-white shadow-sm outline-none dropdown-accounts"></select></div>
+                <div class="flex-1"><label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Master Memo / Narration</label><input type="text" id="smart-vouch-memo" placeholder="Description..." class="w-full border rounded-xl px-4 py-2 text-sm bg-white shadow-sm outline-none"></div>
+            </div>
+            <div class="flex-1 overflow-x-auto bg-slate-50 p-4 no-scrollbar">
+                <table class="w-full text-left text-sm min-w-[700px]">
+                    <thead class="text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b-2 border-slate-200"><tr><th id="smart-vouch-col-type" class="pb-2 w-20 hidden">Type</th><th id="smart-vouch-col-acc" class="pb-2 hidden">Account</th><th class="pb-2">Category (Head)</th><th class="pb-2">Event</th><th class="pb-2">Member / Payer</th><th class="pb-2 text-right">Amount (₹)</th><th class="pb-2 text-center w-10"></th></tr></thead>
+                    <tbody id="smart-vouch-lines" class="divide-y divide-slate-200/60"></tbody>
+                </table>
+                <button type="button" onclick="addSmartVoucherLine(document.getElementById('smart-vouch-mode').value)" class="mt-4 text-xs font-bold text-indigo-600 bg-indigo-50 px-4 py-2 rounded-lg hover:bg-indigo-100 border border-indigo-100 transition-colors"><i class="fas fa-plus mr-1"></i> Add Line</button>
+            </div>
+            <div class="p-4 border-t border-slate-200 bg-white flex flex-col md:flex-row justify-between items-center shrink-0 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] rounded-b-2xl gap-4">
+                <div class="flex gap-4 md:gap-6 w-full md:w-auto justify-between md:justify-start">
+                    <div class="text-right hidden" id="smart-vouch-dr-box"><p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Debit</p><p class="text-lg font-black text-emerald-600 font-mono" id="smart-vouch-tot-dr">₹0.00</p></div>
+                    <div class="text-right hidden" id="smart-vouch-cr-box"><p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Credit</p><p class="text-lg font-black text-rose-600 font-mono" id="smart-vouch-tot-cr">₹0.00</p></div>
+                    <div class="text-right"><p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider" id="smart-vouch-tot-label">Total Amount</p><p class="text-xl font-black font-mono text-slate-800" id="smart-vouch-tot-amt">₹0.00</p></div>
+                </div>
+                <div class="flex gap-3 w-full md:w-auto items-center">
+                    <button type="button" id="smart-vouch-delete-btn" class="hidden flex-1 md:flex-none px-4 py-2.5 text-sm font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl border border-rose-200 transition-all" title="Delete Voucher completely"><i class="fas fa-trash-alt mr-1"></i> Delete</button>
+                    <button type="button" onclick="closeModal('modal-smart-voucher')" class="flex-1 md:flex-none px-6 py-2.5 text-sm font-medium rounded-xl hover:bg-slate-100 border border-slate-200">Cancel</button>
+                    <button type="submit" id="smart-vouch-submit-btn" disabled class="flex-1 md:flex-none px-6 py-2.5 text-sm font-bold text-white bg-indigo-600 rounded-xl shadow-md disabled:opacity-50 transition-all">Save Voucher</button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <!-- Modals: General & Details -->
+    <div id="modal-account-list" class="modal hidden fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-lg rounded-2xl shadow-xl flex flex-col max-h-[80vh]">
+            <div class="p-5 border-b bg-slate-50 flex justify-between"><h3 class="font-bold text-lg" id="drilldown-title">Account Balances</h3><button type="button" onclick="closeModal('modal-account-list')"><i class="fas fa-times text-slate-400"></i></button></div>
+            <div class="p-4 overflow-y-auto flex-1 bg-slate-50/50"><table class="w-full text-left text-sm"><thead class="text-[10px] font-bold text-slate-400 uppercase border-b"><tr><th class="pb-2">Account Name</th><th class="pb-2 text-right">Balance</th><th class="pb-2 text-center">Action</th></tr></thead><tbody id="drilldown-tbody" class="divide-y divide-slate-100"></tbody></table></div>
+        </div>
+    </div>
+    
+    <div id="modal-details" class="modal hidden fixed inset-0 bg-slate-900/40 z-[70] flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col max-h-[80vh]">
+            <div class="p-4 border-b bg-slate-50 flex justify-between items-center"><h3 class="font-bold text-slate-800" id="details-title">Details</h3><button type="button" onclick="closeModal('modal-details')"><i class="fas fa-times text-slate-400 hover:text-rose-500 transition-colors"></i></button></div>
+            <div class="p-0 overflow-x-auto flex-1 bg-slate-50/50"><div id="details-content" class="text-xs text-slate-600 whitespace-nowrap min-w-[500px]"></div></div>
+            <div class="p-4 border-t flex justify-end items-center bg-slate-50">
+                <button type="button" onclick="closeModal('modal-details')" class="px-5 py-2 text-sm bg-white border border-slate-200 rounded-xl hover:bg-slate-100 font-medium transition-colors">Close Details</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modals: Member Directory vs Security Role -->
+    <div id="modal-member" class="modal hidden fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4">
+        <form id="form-member" class="bg-white w-full max-w-md rounded-2xl shadow-xl overflow-hidden flex flex-col" onsubmit="executeApiAction(event, 'saveGenericRecord', buildMemberPayload(), 'Members')">
+            <div class="p-5 border-b bg-slate-50 flex justify-between"><h3 class="font-bold text-lg">Directory Profile</h3><button type="button" onclick="closeModal('modal-member')"><i class="fas fa-times text-slate-400"></i></button></div>
+            <div class="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                <input type="hidden" id="mem-id" data-col="ID">
+                <div><label class="block text-xs font-bold text-slate-500">Full Name</label><input type="text" id="mem-name" data-col="Name" required class="w-full border rounded-xl px-4 py-2 text-sm"></div>
+                <div><label class="block text-xs font-bold text-slate-500">Email</label><input type="email" id="mem-email" data-col="Email" class="w-full border rounded-xl px-4 py-2 text-sm"></div>
+                <div><label class="block text-xs font-bold text-slate-500">Directory Status</label><select id="mem-status" data-col="Status" class="w-full border rounded-xl px-4 py-2 text-sm"><option value="1">Active</option><option value="0">Disabled</option></select></div>
+                <div class="border-t pt-4 mt-2"><label class="block text-xs font-bold text-slate-500 mb-2">Custom Fields</label><div id="mem-config-container" class="space-y-3"></div></div>
+            </div>
+            <div class="p-4 border-t flex justify-end gap-3"><button type="button" onclick="closeModal('modal-member')" class="px-5 py-2 text-sm rounded-xl hover:bg-slate-100 transition-colors">Cancel</button><button type="submit" class="px-5 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors">Save Directory Info</button></div>
+        </form>
+    </div>
+
+    <div id="modal-user" class="modal hidden fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4">
+        <form id="form-user" class="bg-white w-full max-w-md rounded-2xl shadow-xl overflow-hidden flex flex-col border-2 border-indigo-400" onsubmit="executeApiAction(event, 'saveUserAuth', buildUserPayload())">
+            <div class="p-5 border-b bg-indigo-50 flex justify-between"><h3 class="font-bold text-lg text-indigo-900"><i class="fas fa-shield-alt mr-2 text-indigo-600"></i>Manage System Access</h3><button type="button" onclick="closeModal('modal-user')"><i class="fas fa-times text-indigo-400 hover:text-indigo-600"></i></button></div>
+            <div class="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                <input type="hidden" id="user-member-id">
+                <p class="text-xs text-slate-500 mb-4">You are granting system login capabilities to: <strong id="user-member-name-label" class="text-slate-800"></strong></p>
+                <div><label class="block text-xs font-bold text-slate-500">Username (Required to login)</label><input type="text" id="user-username" required class="w-full border rounded-xl px-4 py-2 text-sm font-bold text-indigo-600"></div>
+                <div class="bg-slate-100 p-3 rounded-lg border border-slate-200">
+                    <label class="block text-xs font-bold text-slate-600 mb-1">Set / Reset Password</label>
+                    <input type="password" id="user-newpass" placeholder="Leave blank to keep current password" class="w-full border rounded-lg px-3 py-2 text-sm font-mono bg-white">
+                </div>
+                <div><label class="block text-xs font-bold text-slate-500">System Role</label><select id="user-role" class="w-full border rounded-xl px-4 py-2 text-sm"><option value="1">Member (Viewer)</option><option value="2">Administrator</option></select></div>
+                <div id="user-locked-warning" class="hidden bg-rose-50 text-rose-700 text-xs font-bold p-3 rounded-lg border border-rose-200">
+                    <i class="fas fa-lock mr-1"></i> Account is locked out due to failed attempts. <br>
+                    <label class="mt-2 flex items-center gap-2 cursor-pointer"><input type="checkbox" id="user-unlock"> Check this box to Unlock account now</label>
+                </div>
+            </div>
+            <div class="p-4 border-t flex justify-end gap-3"><button type="button" onclick="closeModal('modal-user')" class="px-5 py-2 text-sm rounded-xl hover:bg-slate-100 transition-colors">Cancel</button><button type="submit" class="px-5 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors">Save Security Config</button></div>
+        </form>
+    </div>
+
+    <!-- Modals: Expected & Bulk & Master -->
+    <div id="modal-contrib" class="modal hidden fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4"><form id="form-contrib" class="bg-white w-full max-w-sm rounded-2xl shadow-xl flex flex-col" onsubmit="executeApiAction(event, 'saveGenericRecord', buildExpectedPayload(), 'Expected')"><div class="p-4 border-b bg-slate-50"><h3 class="font-bold text-slate-800">Set Single Due</h3></div><div class="p-5 space-y-4"><input type="hidden" id="exp-id"><div><label class="block text-xs font-bold text-slate-500">Date</label><input type="date" id="exp-date" required class="w-full border rounded-xl px-3 py-2"></div><div><label class="block text-xs font-bold text-slate-500">Member</label><select id="exp-member" required class="w-full border rounded-xl px-3 py-2 dropdown-members"></select></div><div><label class="block text-xs font-bold text-slate-500">Event</label><select id="exp-event" required class="w-full border rounded-xl px-3 py-2 dropdown-events"></select></div><div><label class="block text-xs font-bold text-slate-500">Expected (₹)</label><input type="number" step="0.01" id="exp-amount" required class="w-full border rounded-xl px-3 py-2 font-bold text-indigo-700"></div></div><div class="p-4 border-t bg-slate-50 flex justify-end gap-2"><button type="button" onclick="closeModal('modal-contrib')" class="px-4 py-2 text-sm rounded-xl hover:bg-slate-200 transition-colors">Cancel</button><button type="submit" class="px-4 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors">Save</button></div></form></div>
+    <div id="modal-bulk-contrib" class="modal hidden fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4"><form id="form-bulk-contrib" class="bg-white w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col max-h-[85vh]" onsubmit="executeApiAction(event, 'saveBulkExpected', buildBulkExpectedPayload())"><div class="p-4 border-b bg-slate-50 flex justify-between"><h3 class="font-bold text-slate-800">Bulk Assign Dues</h3><button type="button" onclick="closeModal('modal-bulk-contrib')"><i class="fas fa-times text-slate-400"></i></button></div><div class="p-4 grid grid-cols-1 md:grid-cols-3 gap-4 border-b"><div><label class="block text-xs font-bold text-slate-500">Date</label><input type="date" id="bulk-date" required class="w-full border rounded-lg px-3 py-1.5"></div><div><label class="block text-xs font-bold text-slate-500">Event</label><select id="bulk-event" required class="w-full border rounded-lg px-3 py-1.5 dropdown-events"></select></div><div><label class="block text-xs font-bold text-slate-500">Amount per Member</label><input type="number" step="0.01" id="bulk-amount" required class="w-full border rounded-lg px-3 py-1.5 font-bold"></div></div><div class="p-0 overflow-y-auto flex-1 bg-slate-50"><table class="w-full text-left text-sm whitespace-nowrap"><thead class="bg-slate-100 text-slate-500 font-bold uppercase text-[10px] sticky top-0"><tr><th class="px-4 py-2 w-10 text-center"><input type="checkbox" onchange="document.querySelectorAll('.bulk-cb').forEach(cb => cb.checked = this.checked)" checked></th><th class="px-4 py-2">Select Members</th></tr></thead><tbody id="bulk-tbody" class="bg-white"></tbody></table></div><div class="p-4 border-t flex justify-end gap-2"><button type="button" onclick="closeModal('modal-bulk-contrib')" class="px-4 py-2 text-sm rounded-xl hover:bg-slate-100 transition-colors">Cancel</button><button type="submit" class="px-4 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors">Assign</button></div></form></div>
+    
+    <div id="modal-account" class="modal hidden fixed inset-0 bg-slate-900/40 z-[60] flex items-center justify-center p-4"><form class="bg-white w-64 rounded-xl shadow-xl overflow-hidden" onsubmit="executeApiAction(event, 'saveGenericRecord', buildMasterPayload(event), 'Accounts')"><input type="hidden" id="acc-id" data-col="ID"><div class="p-4 space-y-3"><h3 class="font-bold text-sm text-slate-800">Add Account</h3><input type="text" id="acc-Name" data-col="Name" placeholder="Name" required class="w-full border rounded-lg px-3 py-2 text-sm"><select id="acc-Type" data-col="Type" class="w-full border rounded-lg px-3 py-2 text-sm"><option value="1">Cash</option><option value="2">Bank</option></select><div class="flex justify-end gap-2 pt-2"><button type="button" onclick="closeModal('modal-account')" class="px-3 py-1.5 text-xs rounded hover:bg-slate-200 transition-colors">Cancel</button><button type="submit" class="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors">Save</button></div></div></form></div>
+    <div id="modal-category" class="modal hidden fixed inset-0 bg-slate-900/40 z-[60] flex items-center justify-center p-4"><form class="bg-white w-64 rounded-xl shadow-xl overflow-hidden" onsubmit="executeApiAction(event, 'saveGenericRecord', buildMasterPayload(event), 'Categories')"><input type="hidden" id="cat-id" data-col="ID"><div class="p-4 space-y-3"><h3 class="font-bold text-sm text-slate-800">Add Category</h3><input type="text" id="cat-Name" data-col="Name" placeholder="Name" required class="w-full border rounded-lg px-3 py-2 text-sm"><select id="cat-Type" data-col="Type" class="w-full border rounded-lg px-3 py-2 text-sm"><option value="Income">Income (Receipt)</option><option value="Expense">Expense (Payment)</option><option value="Liability">Liability (Advance)</option><option value="Asset">Asset (Capital)</option></select><div class="flex justify-end gap-2 pt-2"><button type="button" onclick="closeModal('modal-category')" class="px-3 py-1.5 text-xs rounded hover:bg-slate-200 transition-colors">Cancel</button><button type="submit" class="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors">Save</button></div></div></form></div>
+    <div id="modal-event" class="modal hidden fixed inset-0 bg-slate-900/40 z-[60] flex items-center justify-center p-4"><form class="bg-white w-64 rounded-xl shadow-xl overflow-hidden" onsubmit="executeApiAction(event, 'saveGenericRecord', buildMasterPayload(event), 'Events')"><input type="hidden" id="ev-id" data-col="ID"><div class="p-4 space-y-3"><h3 class="font-bold text-sm text-slate-800">Add Event</h3><input type="text" id="ev-Name" data-col="Name" placeholder="Event Name" required class="w-full border rounded-lg px-3 py-2 text-sm"><input type="date" id="ev-Date" data-col="Date" class="w-full border rounded-lg px-3 py-2 text-sm"><div class="flex justify-end gap-2 pt-2"><button type="button" onclick="closeModal('modal-event')" class="px-3 py-1.5 text-xs rounded hover:bg-slate-200 transition-colors">Cancel</button><button type="submit" class="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors">Save</button></div></div></form></div>
+    <div id="modal-config" class="modal hidden fixed inset-0 bg-slate-900/40 z-[60] flex items-center justify-center p-4"><form class="bg-white w-64 rounded-xl shadow-xl overflow-hidden" onsubmit="executeApiAction(event, 'saveGenericRecord', buildMasterPayload(event), 'MemberConfig')"><div class="p-4 space-y-3"><h3 class="font-bold text-sm text-slate-800">Add Custom Field</h3><input type="text" data-col="FieldKey" placeholder="Key (e.g. adhaarNo)" required class="w-full border rounded-lg px-3 py-2 text-sm font-mono text-slate-500"><input type="text" data-col="Label" placeholder="Display Label (e.g. Adhaar Card)" required class="w-full border rounded-lg px-3 py-2 text-sm"><select data-col="Type" class="w-full border rounded-lg px-3 py-2 text-sm"><option value="text">Text / String</option><option value="number">Number</option><option value="date">Date</option></select><div class="flex justify-end gap-2 pt-2"><button type="button" onclick="closeModal('modal-config')" class="px-3 py-1.5 text-xs rounded hover:bg-slate-200 transition-colors">Cancel</button><button type="submit" class="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors">Save</button></div></div></form></div>
+
+    <script src="url.js"></script>
+    <script src="app.js" defer></script>
+</body>
+</html>
