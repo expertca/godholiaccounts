@@ -89,8 +89,13 @@ function apiCall(methodName, ...args) {
             fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify({ method: methodName, token: tokenToUse, args: args }) })
             .then(r => r.json()).then(res => {
                 if (res.error === "SESSION_EXPIRED") {
-                    document.getElementById('reauthPassword').value = ''; openModal('reAuthGate');
-                    new Promise(resReAuth => { currentAuthResolver = resReAuth; }).then(newToken => attemptCall(newToken)); 
+                    // Fix: Check if user is known. If not (hard refresh), skip re-auth modal and just logout.
+                    if (!userCtx || !userCtx.username) {
+                        logout();
+                    } else {
+                        document.getElementById('reauthPassword').value = ''; openModal('reAuthGate');
+                        new Promise(resReAuth => { currentAuthResolver = resReAuth; }).then(newToken => attemptCall(newToken)); 
+                    }
                 } else if (res.error) { reject(new Error(res.error)); } else { resolve(res); }
             }).catch(err => reject(new Error("Network Error: Could not reach the server.")));
         };
@@ -120,7 +125,6 @@ function renderAllViews() {
     renderMembers(); renderContributions(); renderDonations(); renderLiabilities(); renderLedger(); renderMasterData(); renderAudit();
 }
 
-// --- INSTANT DELTA UPDATES (Zero Load Screen on Save) ---
 async function executeApiAction(e, methodName, payloadStr, optionalArg = null) {
     if(e) e.preventDefault(); const form = e.target, btn = form.querySelector('button[type="submit"]'), originalText = btn.innerHTML;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...'; btn.disabled = true;
@@ -367,7 +371,7 @@ function renderMembers() {
     tbody.innerHTML = [...filtered].reverse().map(m => {
         const u = appData.Users.find(x => x.MemberID === m.ID); let authHtml = `<span class="text-[10px] text-slate-400 italic">No Login Setup</span>`;
         
-        // Admin Clash Security Check
+        // Admin Clash Fix: Now frontend knows the user's explicit ID
         const isMe = u && u.ID === userCtx.id;
         const isTargetAdmin = u && u.Role == 2;
         const canManageAuth = (userCtx.role === 2) && (!isTargetAdmin || isMe || userCtx.username === 'admin');
@@ -380,18 +384,44 @@ function renderMembers() {
 }
 
 // --- ACCOUNTING VIEWS ---
+function showMemberContribHistory(b64) {
+    const records = JSON.parse(decodeURIComponent(escape(atob(b64))));
+    let html = '<div class="overflow-x-auto w-full"><table class="w-full text-left text-xs"><thead class="border-b bg-slate-50"><tr class="text-slate-500 uppercase tracking-wider"><th class="p-3">Date</th><th class="p-3">Voucher</th><th class="p-3">Notes</th><th class="p-3 text-right">Amount</th></tr></thead><tbody class="divide-y divide-slate-100">';
+    records.forEach(r => {
+        const amt = parseFloat(r.Amount);
+        html += `<tr class="hover:bg-slate-50"><td class="p-3 text-[10px] text-slate-500">${r.Date}</td><td class="p-3 text-indigo-600 font-mono">${r.GroupID}</td><td class="p-3 text-slate-600 truncate max-w-[150px]">${r.Notes||'-'}</td><td class="p-3 text-right font-bold ${r.Type==2?'text-emerald-600':'text-rose-600'}">${r.Type==2?fmtIdr(amt):'-'+fmtIdr(amt)}</td></tr>`;
+    });
+    html += '</tbody></table></div>';
+    document.getElementById('details-title').innerText = 'Ledger Transactions (Contribution)';
+    document.getElementById('details-content').innerHTML = html;
+    openModal('modal-details');
+}
+
 function renderContributions() {
     const tbody = document.getElementById('contrib-tbody'); const evtId = document.getElementById('contrib-event-filter').value; const catContribId = appData.Categories.find(c => String(c.Name).toLowerCase().includes('contrib'))?.ID;
     let evtSummary = {}; 
-    appData.Expected.forEach(x => { if(evtId && x.EventID !== evtId) return; const eId = x.EventID || 'general'; if(!evtSummary[eId]) evtSummary[eId] = { name: appData.Events.find(e=>e.ID===eId)?.Name || 'General', due: 0, paid: 0, mems: {} }; if(!evtSummary[eId].mems[x.MemberID]) evtSummary[eId].mems[x.MemberID] = { name: appData.Members.find(m=>m.ID===x.MemberID)?.Name || 'Unknown', due: 0, paid: 0, records: [] }; evtSummary[eId].mems[x.MemberID].records.push({id: x.ID, amt: parseFloat(x.Amount)}); evtSummary[eId].mems[x.MemberID].due += parseFloat(x.Amount); evtSummary[eId].due += parseFloat(x.Amount); });
+    appData.Expected.forEach(x => { if(evtId && x.EventID !== evtId) return; const eId = x.EventID || 'general'; if(!evtSummary[eId]) evtSummary[eId] = { name: appData.Events.find(e=>e.ID===eId)?.Name || 'General', due: 0, paid: 0, mems: {} }; if(!evtSummary[eId].mems[x.MemberID]) evtSummary[eId].mems[x.MemberID] = { name: appData.Members.find(m=>m.ID===x.MemberID)?.Name || 'Unknown', due: 0, paid: 0, records: [], payRecords: [] }; evtSummary[eId].mems[x.MemberID].records.push({id: x.ID, amt: parseFloat(x.Amount)}); evtSummary[eId].mems[x.MemberID].due += parseFloat(x.Amount); evtSummary[eId].due += parseFloat(x.Amount); });
     appData.Ledger.forEach(t => { 
         if(evtId && t.EventID !== evtId) return; if(!t.MemberID || t.MemberID === 'ANON') return; const eId = t.EventID || 'general'; if(!evtSummary[eId] || !evtSummary[eId].mems[t.MemberID]) return; const amt = parseFloat(t.Amount) || 0; 
         if (t.CategoryID === catContribId) { 
-            if(t.Type == 2) { evtSummary[eId].mems[t.MemberID].paid += amt; evtSummary[eId].paid += amt; } 
-            if(t.Type == 1) { evtSummary[eId].mems[t.MemberID].paid -= amt; evtSummary[eId].paid -= amt; }
+            if(t.Type == 2) { evtSummary[eId].mems[t.MemberID].paid += amt; evtSummary[eId].paid += amt; evtSummary[eId].mems[t.MemberID].payRecords.push(t); } 
+            if(t.Type == 1) { evtSummary[eId].mems[t.MemberID].paid -= amt; evtSummary[eId].paid -= amt; evtSummary[eId].mems[t.MemberID].payRecords.push(t); }
         } 
     });
-    let html = ''; Object.keys(evtSummary).forEach(eId => { const ev = evtSummary[eId], bal = ev.due - ev.paid; html += `<tr class="bg-indigo-50 border-b border-indigo-100 cursor-pointer hover:bg-indigo-100 transition-colors" onclick="document.getElementById('evt-details-${eId}').classList.toggle('hidden')"><td class="px-3 py-3 text-xs md:text-sm font-bold text-indigo-800"><i class="fas fa-chevron-down mr-2 text-indigo-400 text-[10px]"></i> ${ev.name}</td><td class="px-3 py-3 text-xs md:text-sm text-right font-bold text-slate-700">${fmtIdr(ev.due)}</td><td class="px-3 py-3 text-xs md:text-sm text-right font-bold text-emerald-600">${fmtIdr(ev.paid)}</td><td class="px-3 py-3 text-xs md:text-sm text-right font-bold ${bal>0?'text-rose-600':'text-slate-500'}">${fmtIdr(bal)}</td></tr>`; html += `<tr id="evt-details-${eId}" class="hidden bg-white"><td colspan="4" class="p-0"><div class="bg-slate-50 py-2 px-2 md:px-8 border-b shadow-inner overflow-x-auto"><table class="w-full text-xs"><thead class="text-slate-400 border-b"><tr><th class="py-2 text-left w-1/3">Member Name</th><th class="py-2 text-right">Expected</th><th class="py-2 text-right">Cont. Paid</th><th class="py-2 text-right">Bal Memo</th><th class="py-2 text-right admin-only w-16">Del</th></tr></thead><tbody>${Object.values(ev.mems).map(m => { const mBal = m.due - m.paid; const delBtns = m.records.map(r => `<button onclick="deleteExpected('${r.id}', this)" title="Delete ₹${r.amt} due" class="text-rose-400 hover:text-rose-600 ml-2 admin-only"><i class="fas fa-trash-alt"></i></button>`).join(''); return `<tr class="border-b border-slate-100 hover:bg-slate-100"><td class="py-2 font-medium whitespace-normal leading-tight">${m.name}</td><td class="py-2 text-right text-slate-500">${fmtIdr(m.due)}</td><td class="py-2 text-right text-emerald-600">${fmtIdr(m.paid)}</td><td class="py-2 text-right font-bold ${mBal>0?'text-rose-500':'text-slate-400'}">${fmtIdr(mBal)}</td><td class="py-2 text-right whitespace-nowrap admin-only">${delBtns}</td></tr>` }).join('')}</tbody></table></div></td></tr>`; });
+    let html = ''; Object.keys(evtSummary).forEach(eId => { 
+        const ev = evtSummary[eId], bal = ev.due - ev.paid; 
+        html += `<tr class="bg-indigo-50 border-b border-indigo-100 cursor-pointer hover:bg-indigo-100 transition-colors" onclick="document.getElementById('evt-details-${eId}').classList.toggle('hidden')"><td class="px-3 py-3 text-xs md:text-sm font-bold text-indigo-800"><i class="fas fa-chevron-down mr-2 text-indigo-400 text-[10px]"></i> ${ev.name}</td><td class="px-3 py-3 text-xs md:text-sm text-right font-bold text-slate-700">${fmtIdr(ev.due)}</td><td class="px-3 py-3 text-xs md:text-sm text-right font-bold text-emerald-600">${fmtIdr(ev.paid)}</td><td class="px-3 py-3 text-xs md:text-sm text-right font-bold ${bal>0?'text-rose-600':'text-slate-500'}">${fmtIdr(bal)}</td></tr>`; 
+        html += `<tr id="evt-details-${eId}" class="hidden bg-white"><td colspan="4" class="p-0"><div class="bg-slate-50 py-2 px-2 md:px-8 border-b shadow-inner overflow-x-auto"><table class="w-full text-xs"><thead class="text-slate-400 border-b"><tr><th class="py-2 text-left w-1/3">Member Name</th><th class="py-2 text-right">Expected</th><th class="py-2 text-right">Cont. Paid</th><th class="py-2 text-right">Bal Memo</th><th class="py-2 text-right admin-only w-16">Del</th></tr></thead><tbody>${Object.values(ev.mems).map(m => { 
+            const mBal = m.due - m.paid; 
+            const delBtns = m.records.map(r => `<button onclick="deleteExpected('${r.id}', this)" title="Delete ₹${r.amt} due" class="text-rose-400 hover:text-rose-600 ml-2 admin-only"><i class="fas fa-trash-alt"></i></button>`).join(''); 
+            
+            // Drilldown feature for Paid amounts
+            const payPayload = btoa(unescape(encodeURIComponent(JSON.stringify(m.payRecords))));
+            const clickablePaid = m.payRecords.length > 0 ? `<button onclick="showMemberContribHistory('${payPayload}')" class="text-emerald-600 hover:text-emerald-800 underline underline-offset-2 decoration-emerald-300">${fmtIdr(m.paid)}</button>` : fmtIdr(m.paid);
+            
+            return `<tr class="border-b border-slate-100 hover:bg-slate-100"><td class="py-2 font-medium whitespace-normal leading-tight">${m.name}</td><td class="py-2 text-right text-slate-500">${fmtIdr(m.due)}</td><td class="py-2 text-right text-emerald-600">${clickablePaid}</td><td class="py-2 text-right font-bold ${mBal>0?'text-rose-500':'text-slate-400'}">${fmtIdr(mBal)}</td><td class="py-2 text-right whitespace-nowrap admin-only">${delBtns}</td></tr>` 
+        }).join('')}</tbody></table></div></td></tr>`; 
+    });
     document.getElementById('contrib-tbody').innerHTML = html || `<tr><td colspan="4" class="text-center py-8 text-slate-400">No expected dues found.</td></tr>`;
     document.querySelectorAll('.admin-only').forEach(el => el.style.display = userCtx.role === 2 ? '' : 'none');
 }
@@ -493,13 +523,29 @@ function runReport() {
 function renderBalanceSheet(toDate) {
     let assetsHtml = '', totalAssets = 0, liabHtml = '', totalLiab = 0, inc = 0, exp = 0;
     const ledgerAsOf = appData.Ledger.filter(t => !toDate || t.Date <= toDate);
+    const catContribId = appData.Categories.find(c => String(c.Name).toLowerCase().includes('contrib'))?.ID;
 
     appData.Accounts.forEach(a => { let aBal = 0; ledgerAsOf.filter(t=>t.AccountID === a.ID).forEach(t => { aBal += (t.Type == 1 ? Math.abs(parseFloat(t.Amount)) : -Math.abs(parseFloat(t.Amount))); }); if (aBal !== 0) { assetsHtml += `<div class="flex justify-between py-2 border-b border-slate-100"><span class="text-slate-600">${a.Name}</span><span class="font-bold text-slate-700">${fmtIdr(aBal)}</span></div>`; totalAssets += aBal; } });
     appData.Categories.filter(c=>c.Type==='Asset').forEach(c => { let cBal = 0; ledgerAsOf.filter(t=>t.CategoryID === c.ID).forEach(t => { cBal += (t.Type == 1 ? Math.abs(parseFloat(t.Amount)) : -Math.abs(parseFloat(t.Amount))); }); if (cBal !== 0) { assetsHtml += `<div class="flex justify-between py-2 border-b border-slate-100"><span class="text-slate-600">${c.Name} (Capitalized)</span><span class="font-bold text-slate-700">${fmtIdr(cBal)}</span></div>`; totalAssets += cBal; } });
     
     appData.Categories.filter(c=>c.Type==='Liability').forEach(c => { let cBal = 0; ledgerAsOf.filter(t=>t.CategoryID === c.ID).forEach(t => { cBal += (t.Type == 2 ? Math.abs(parseFloat(t.Amount)) : -Math.abs(parseFloat(t.Amount))); }); if (cBal !== 0) { liabHtml += `<div class="flex justify-between py-2 border-b border-slate-100"><span class="text-slate-600">${c.Name} (Payables)</span><span class="font-bold text-slate-700">${fmtIdr(cBal)}</span></div>`; totalLiab += cBal; } });
     
-    ledgerAsOf.forEach(t => { const cat = appData.Categories.find(c=>c.ID === t.CategoryID); if(cat?.Type === 'Income') inc += (t.Type == 2 ? Math.abs(parseFloat(t.Amount)) : -Math.abs(parseFloat(t.Amount))); if(cat?.Type === 'Expense') exp += (t.Type == 1 ? Math.abs(parseFloat(t.Amount)) : -Math.abs(parseFloat(t.Amount))); });
+    // Capital Receipts: Contributions are excluded from Surplus and sit natively on the Balance Sheet as a Liability (Corpus)
+    let totalContrib = 0;
+    ledgerAsOf.filter(t=>t.CategoryID === catContribId).forEach(t => { totalContrib += (t.Type == 2 ? Math.abs(parseFloat(t.Amount)) : -Math.abs(parseFloat(t.Amount))); });
+    if (totalContrib !== 0) {
+        liabHtml += `<div class="flex justify-between py-2 border-b border-slate-100"><span class="text-indigo-600 font-medium">Corpus / Contributions</span><span class="font-bold text-indigo-700">${fmtIdr(totalContrib)}</span></div>`;
+        totalLiab += totalContrib;
+    }
+
+    // Surplus Calc (excluding Contributions)
+    ledgerAsOf.forEach(t => { 
+        const cat = appData.Categories.find(c=>c.ID === t.CategoryID); 
+        if(cat && cat.ID !== catContribId) {
+            if(cat.Type === 'Income') inc += (t.Type == 2 ? Math.abs(parseFloat(t.Amount)) : -Math.abs(parseFloat(t.Amount))); 
+            if(cat.Type === 'Expense') exp += (t.Type == 1 ? Math.abs(parseFloat(t.Amount)) : -Math.abs(parseFloat(t.Amount))); 
+        }
+    });
     const surplus = inc - exp;
     
     document.getElementById('report-container').innerHTML = `
@@ -509,8 +555,8 @@ function renderBalanceSheet(toDate) {
             <div class="bg-white rounded-2xl border shadow-sm overflow-hidden flex flex-col">
                 <div class="bg-rose-50 border-b p-4 text-rose-800 font-bold uppercase text-sm tracking-wider">Liabilities & Capital</div>
                 <div class="p-6 space-y-2 flex-1">
-                    <h4 class="font-bold text-slate-400 text-[10px] uppercase tracking-wider mb-2">Advances & Payables</h4>${liabHtml || '<p class="text-xs text-slate-400 italic py-2">No active liabilities.</p>'}
-                    <h4 class="font-bold text-slate-400 text-[10px] uppercase tracking-wider mt-6 mb-2">General Fund (Capital)</h4>
+                    <h4 class="font-bold text-slate-400 text-[10px] uppercase tracking-wider mb-2">Advances, Payables & Corpus</h4>${liabHtml || '<p class="text-xs text-slate-400 italic py-2">No active liabilities.</p>'}
+                    <h4 class="font-bold text-slate-400 text-[10px] uppercase tracking-wider mt-6 mb-2">General Fund (Surplus)</h4>
                     <div class="flex justify-between py-2 border-b border-slate-100"><span class="text-slate-600">Surplus / (Deficit) All-Time</span><span class="font-bold ${surplus>=0?'text-emerald-600':'text-rose-600'}">${fmtIdr(surplus)}</span></div>
                 </div>
                 <div class="bg-slate-50 border-t p-5 flex justify-between font-black text-lg text-slate-800"><span>Total</span><span>${fmtIdr(totalLiab + surplus)}</span></div>
@@ -528,9 +574,17 @@ function renderBalanceSheet(toDate) {
 
 function renderIncomeExpense(fromDate, toDate) {
     let inc = {}, exp = {}, tInc = 0, tExp = 0;
+    const catContribId = appData.Categories.find(c => String(c.Name).toLowerCase().includes('contrib'))?.ID;
     const ledgerRange = appData.Ledger.filter(t => (!fromDate || t.Date >= fromDate) && (!toDate || t.Date <= toDate));
     
-    ledgerRange.forEach(t => { const amt = Math.abs(parseFloat(t.Amount)) || 0; const cat = appData.Categories.find(c=>c.ID === t.CategoryID); if (cat) { if (cat.Type === 'Income') { inc[cat.Name] = (inc[cat.Name]||0) + (t.Type==2?amt:-amt); tInc += (t.Type==2?amt:-amt); } if (cat.Type === 'Expense') { exp[cat.Name] = (exp[cat.Name]||0) + (t.Type==1?amt:-amt); tExp += (t.Type==1?amt:-amt); } } });
+    // Ignored Capital Receipts (Contributions) in calculation
+    ledgerRange.forEach(t => { 
+        const amt = Math.abs(parseFloat(t.Amount)) || 0; const cat = appData.Categories.find(c=>c.ID === t.CategoryID); 
+        if (cat && cat.ID !== catContribId) { 
+            if (cat.Type === 'Income') { inc[cat.Name] = (inc[cat.Name]||0) + (t.Type==2?amt:-amt); tInc += (t.Type==2?amt:-amt); } 
+            if (cat.Type === 'Expense') { exp[cat.Name] = (exp[cat.Name]||0) + (t.Type==1?amt:-amt); tExp += (t.Type==1?amt:-amt); } 
+        } 
+    });
     
     const renderRows = (obj) => Object.entries(obj).map(([k,v]) => `<div class="flex justify-between py-1.5 border-b border-slate-100 text-slate-600"><span>${k}</span><span class="font-medium">${fmtIdr(v)}</span></div>`).join('');
     document.getElementById('report-container').innerHTML = `
@@ -573,7 +627,6 @@ function renderAccountStatement(accId, fromDate, toDate) {
         
         if(myLines.length === 0) return;
 
-        // Unmerged distinct statement row logic
         if (myLines.length === 1 && otherLines.length > 0) {
             const myType = myLines[0].Type;
             otherLines.forEach(opp => {
